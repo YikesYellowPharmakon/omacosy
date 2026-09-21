@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Native macOS fullscreen parks traffic lights in the (hidden) menu bar.
+# Exit that mode and put the window back in the tiled work area.
+set -euo pipefail
+AERO=/opt/homebrew/bin/aerospace
+[ -x "$AERO" ] || AERO=/usr/local/bin/aerospace
+[ -x "$AERO" ] || exit 0
+
+"$AERO" list-windows --all --format '%{window-id}|%{window-layout}' 2>/dev/null \
+  | while IFS='|' read -r id layout _; do
+      [ "$layout" = "macos_native_fullscreen" ] || continue
+      "$AERO" macos-native-fullscreen off --window-id "$id" --fail-if-noop >/dev/null 2>&1 || true
+      "$AERO" layout tiling --window-id "$id" >/dev/null 2>&1 || true
+    done

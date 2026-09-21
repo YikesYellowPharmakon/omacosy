@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.omacosy.vapor-engine</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/ye/.local/bin/omacosy-vapor-engine</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OMACOSY_VAPOR_WEB</key>
+    <string>/Users/ye/.local/share/omacosy/helper/vapor-sys-saver/web</string>
+  </dict>
+  <key>StandardErrorPath</key>
+  <string>/tmp/omacosy-vapor-engine.err</string>
+</dict>
+</plist>

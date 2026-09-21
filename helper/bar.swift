@@ -300,6 +300,7 @@ struct Palette {
     var itemBG = NSColor.black
     var accent = NSColor.systemBlue
     var label = NSColor.white
+    var icon = NSColor.white
     var muted = NSColor.gray
     var barBG = NSColor.black
     var red = NSColor.systemRed
@@ -314,8 +315,18 @@ func color(fromARGB v: UInt64) -> NSColor {
             alpha: CGFloat((v >> 24) & 0xff) / 255)
 }
 
+func mixColor(_ a: NSColor, _ b: NSColor, _ t: CGFloat) -> NSColor {
+    let a = a.usingColorSpace(.sRGB) ?? a
+    let b = b.usingColorSpace(.sRGB) ?? b
+    return NSColor(srgbRed: a.redComponent + (b.redComponent - a.redComponent) * t,
+                   green: a.greenComponent + (b.greenComponent - a.greenComponent) * t,
+                   blue: a.blueComponent + (b.blueComponent - a.blueComponent) * t,
+                   alpha: 1)
+}
+
 func loadPalette() -> Palette {
     var p = Palette()
+    var iconFromFile = false
     let file = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".config/omarchy/current/theme/sketchybar.sh")
     guard let text = try? String(contentsOf: file, encoding: .utf8) else { return p }
@@ -327,6 +338,9 @@ func loadPalette() -> Palette {
         case "ITEM_BG": p.itemBG = color(fromARGB: v)
         case "ACCENT": p.accent = color(fromARGB: v)
         case "LABEL_COLOR": p.label = color(fromARGB: v)
+        case "ICON_COLOR":
+            p.icon = color(fromARGB: v)
+            iconFromFile = true
         case "MUTED": p.muted = color(fromARGB: v)
         case "BAR_BG_SOLID": p.barBG = color(fromARGB: v)
         case "RED": p.red = color(fromARGB: v)
@@ -334,6 +348,19 @@ func loadPalette() -> Palette {
         case "YELLOW": p.yellow = color(fromARGB: v)
         default: break
         }
+    }
+    // enter-the-matrix already ships a hue-matched icon color. Other
+    // themes used raw foreground (near-white), so right-side glyphs
+    // looked generic. If ICON_COLOR is missing or just a copy of the
+    // label, blend accent toward the label the way matrix already reads.
+    let a = p.icon.usingColorSpace(.sRGB) ?? p.icon
+    let b = p.label.usingColorSpace(.sRGB) ?? p.label
+    let dr = a.redComponent - b.redComponent
+    let dg = a.greenComponent - b.greenComponent
+    let db = a.blueComponent - b.blueComponent
+    let sameAsLabel = (dr * dr + dg * dg + db * db).squareRoot() < 0.08
+    if !iconFromFile || sameAsLabel {
+        p.icon = mixColor(p.accent, p.label, 0.32)
     }
     return p
 }
@@ -600,7 +627,8 @@ struct BarItem: Equatable {
 }
 
 // screen order, left to right
-let rightOrder = ["weather", "wifi", "bluetooth", "brightness", "volume", "battery", "clock", "activity"]
+let rightOrder = ["weather", "wifi", "bluetooth", "brightness", "volume", "battery",
+                  "notifications", "clock", "activity"]
 var rightItems: [String: BarItem] = [:]
 
 func set(_ name: String, _ mutate: (inout BarItem) -> Void) {
@@ -616,17 +644,42 @@ func set(_ name: String, _ mutate: (inout BarItem) -> Void) {
     tlog(String(format: "item %@ %.2f ms", name, Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000))
 }
 
+func clickNotificationCenter() {
+    // Wait until the real mouse-up is over. Opening the tray on mouse-down
+    // (or faking a click on the invisible extra) toggles it open and the
+    // following mouse-up immediately slams it shut.
+    //
+    // Never prompt for Accessibility from this process. The AeroSpace
+    // child watcher reads the file and clicks the Clock extra.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+        let dir = NSHomeDirectory() + "/.local/state/omacosy"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let path = dir + "/tray-cmd"
+        let body = "notifications \(Date().timeIntervalSince1970)\n"
+        try? body.write(toFile: path, atomically: true, encoding: .utf8)
+        tlog("tray request notifications")
+    }
+}
+
 func shell(_ launch: String, _ args: [String]) -> String {
+    shell2(launch, args).out
+}
+
+func shell2(_ launch: String, _ args: [String]) -> (out: String, err: String, status: Int32) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: launch)
     p.arguments = args
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = FileHandle.nullDevice
-    guard (try? p.run()) != nil else { return "" }
-    let out = pipe.fileHandleForReading.readDataToEndOfFile()
+    let outPipe = Pipe()
+    let errPipe = Pipe()
+    p.standardOutput = outPipe
+    p.standardError = errPipe
+    guard (try? p.run()) != nil else { return ("", "spawn failed", -1) }
+    let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     p.waitUntilExit()
-    return String(data: out, encoding: .utf8) ?? ""
+    return (out.trimmingCharacters(in: .whitespacesAndNewlines),
+            err.trimmingCharacters(in: .whitespacesAndNewlines),
+            p.terminationStatus)
 }
 
 // --- clock (no publisher: the one honest timer, aligned to the minute)
@@ -651,8 +704,8 @@ func updateBattery() {
         var icon = "󰂃", color = palette.red
         switch pct {
         case 90...: icon = "󰁹"; color = palette.green
-        case 60..<90: icon = "󰂀"; color = palette.label
-        case 30..<60: icon = "󰁾"; color = palette.label
+        case 60..<90: icon = "󰂀"; color = palette.icon
+        case 30..<60: icon = "󰁾"; color = palette.icon
         case 10..<30: icon = "󰁻"; color = palette.yellow
         default: break
         }
@@ -883,11 +936,10 @@ final class LocationGate: NSObject, CLLocationManagerDelegate {
         case .denied, .restricted:
             tlog("location: denied — the wi-fi pill stays nameless")
         default:
-            guard managed else {
-                tlog("location: not launchd-managed, so not prompting")
-                return
-            }
-            manager.requestWhenInUseAuthorization()
+            // Do not prompt. Every ad-hoc rebuild is a new TCC identity,
+            // so requestWhenInUseAuthorization re-opens the dialog even
+            // after the user already allowed an older omacosy-bar row.
+            tlog("location: not authorized, not prompting")
         }
     }
 
@@ -1218,6 +1270,7 @@ struct PopupRow {
     var hero = false // accent, bold — the title row
     var dim = false // the quiet action footer
     var highlight = false // today's week, the active device
+    var subtitle = "" // second line on a themed card row
     var slider: Double? // 0...1 draws a track instead of text
     var onSlide: ((Double) -> Void)?
     var action: (() -> Void)?
@@ -1246,22 +1299,36 @@ final class PopupView: NSView {
     }
 
     func color(_ row: PopupRow) -> NSColor {
-        if row.hero { return palette.accent }
+        if row.hero { return onAccentText() }
         // the dim footer is the label colour at 60%, the same relationship
         // the shell popups build with a 0x99 alpha prefix
         if row.dim { return palette.label.withAlphaComponent(0.6) }
         return palette.label
     }
 
+    func onAccentText() -> NSColor {
+        let c = palette.accent.usingColorSpace(.sRGB) ?? palette.accent
+        let lum = 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+        return lum > 0.55 ? palette.barBG : NSColor.white
+    }
+
+    func popupFill() -> NSColor { mixColor(palette.barBG, palette.accent, 0.10) }
+
     // separators are hairlines, not rows: a full 26 pt of blank per
     // rule made long menus read bulky instead of sectioned
-    func rowH(_ row: PopupRow) -> CGFloat { row.separator ? 10 : rowHeight }
+    func rowH(_ row: PopupRow) -> CGFloat {
+        if row.separator { return 10 }
+        if row.hero { return 32 }
+        if !row.subtitle.isEmpty { return 40 }
+        return rowHeight
+    }
 
     func measure() -> NSSize {
         var width: CGFloat = 0
         var height: CGFloat = popupPad * 2
         for row in rows {
             var w = advance(row.text, font(row))
+            if !row.subtitle.isEmpty { w = max(w, advance(row.subtitle, nerdFont("Regular", 11))) }
             if !row.detail.isEmpty { w += advance(row.detail, nerdFont("Regular", 11)) + 24 }
             if !row.icon.isEmpty { w += inkBox(row.icon, nerdFont("Bold", 13)).width + 8 }
             if row.image != nil { w += 22 }
@@ -1276,7 +1343,7 @@ final class PopupView: NSView {
         rowRects.removeAll()
         // plain fill: the scroll CONTAINER carries the rounded clip and
         // border, so corners stay put while tall content scrolls
-        palette.barBG.setFill()
+        popupFill().setFill()
         bounds.fill()
 
         var y = bounds.height - popupPad
@@ -1285,13 +1352,16 @@ final class PopupView: NSView {
             y -= h
             let rect = NSRect(x: popupPad, y: y, width: bounds.width - popupPad * 2, height: h)
             if row.separator {
-                palette.label.withAlphaComponent(0.15).setFill()
+                palette.accent.withAlphaComponent(0.28).setFill()
                 NSRect(x: rect.minX + 2, y: rect.midY - 0.5, width: rect.width - 4, height: 1).fill()
                 rowRects.append((index, rect))
                 continue
             }
-            if row.highlight || index == hoveredRow {
-                palette.itemBG.setFill()
+            if row.hero {
+                palette.accent.setFill()
+                NSBezierPath(roundedRect: rect.insetBy(dx: -2, dy: 3), xRadius: 6, yRadius: 6).fill()
+            } else if row.highlight || index == hoveredRow {
+                mixColor(palette.itemBG, palette.accent, 0.28).setFill()
                 NSBezierPath(roundedRect: rect.insetBy(dx: -2, dy: 2), xRadius: 4, yRadius: 4).fill()
             }
             var x = rect.minX + 4
@@ -1304,7 +1374,7 @@ final class PopupView: NSView {
                 // cap height — one way of placing things in this file
                 let iconFont = nerdFont("Bold", 13)
                 let w = inkBox(row.icon, iconFont).width
-                drawIcon(row.icon, iconFont, palette.accent,
+                drawIcon(row.icon, iconFont, row.hero ? onAccentText() : palette.accent,
                          centeredIn: NSRect(x: x, y: rect.minY, width: w, height: rect.height))
                 x += w + 8
             }
@@ -1321,8 +1391,16 @@ final class PopupView: NSView {
                 drawText(row.text, font(row), color(row),
                          leftAt: rect.maxX - advance(row.text, font(row)) - 4, midY: rect.midY)
             } else {
-                let tint = index == hoveredRow && row.action != nil ? palette.accent : color(row)
-                drawText(row.text, font(row), tint, leftAt: x, midY: rect.midY)
+                let tint = row.hero ? onAccentText()
+                    : (index == hoveredRow && row.action != nil ? palette.accent : color(row))
+                if row.subtitle.isEmpty {
+                    drawText(row.text, font(row), tint, leftAt: x, midY: rect.midY)
+                } else {
+                    drawText(row.text, font(row), tint, leftAt: x, midY: rect.midY + 7)
+                    drawText(row.subtitle, nerdFont("Regular", 11),
+                             palette.label.withAlphaComponent(0.55),
+                             leftAt: x, midY: rect.midY - 8)
+                }
                 if !row.detail.isEmpty {
                     let df = nerdFont("Regular", 11)
                     drawText(row.detail, df, palette.label.withAlphaComponent(0.5),
@@ -1344,6 +1422,8 @@ final class PopupView: NSView {
                                        options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
                                        owner: self))
     }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
@@ -1378,6 +1458,7 @@ final class PopupView: NSView {
 
 final class PopupWindow: NSWindow {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    override var canBecomeKey: Bool { true }
 }
 
 var popupWindow: PopupWindow?
@@ -1389,6 +1470,7 @@ func closePopup() {
     popupWindow = nil
     popupView = nil
     openPopup = nil
+    themePickerOpen = false
 }
 
 // rows are rebuilt, not patched: the content is cheap to regenerate and a
@@ -1460,11 +1542,12 @@ func showPopup(_ name: String, under anchor: NSRect, on surface: BarSurface, ali
     scroll.wantsLayer = true
     scroll.layer?.cornerRadius = popupRadius
     scroll.layer?.masksToBounds = true
-    scroll.layer?.borderWidth = 1
+    scroll.layer?.borderWidth = 1.5
     scroll.layer?.borderColor = palette.accent.cgColor
+    scroll.layer?.backgroundColor = mixColor(palette.barBG, palette.accent, 0.10).cgColor
     window.contentView = scroll
     view.scroll(NSPoint(x: 0, y: max(0, size.height - winH))) // start at the top
-    window.orderFrontRegardless()
+    window.makeKeyAndOrderFront(nil)
     popupWindow = window
     popupView = view
     openPopup = name
@@ -1708,24 +1791,73 @@ func appleRows() -> [PopupRow] {
         // locks depends on the screenLock delay, so it usually did not
         PopupRow(text: "Lock Screen",
                  action: run("\(NSHomeDirectory())/.local/bin/omacosy-helper", ["lock"])),
+        PopupRow(text: "Screensaver",
+                 action: run("\(NSHomeDirectory())/.local/bin/omacosy-launch-screensaver", [])),
         PopupRow(text: "Sleep", action: run("/usr/bin/pmset", ["sleepnow"])),
         PopupRow(text: "Restart…", action: systemEvents("restart")),
         PopupRow(text: "Shut Down…", action: systemEvents("shut down")),
-        PopupRow(text: "Next Theme", dim: true,
-                 action: run("\(NSHomeDirectory())/.local/bin/theme-next", [])),
+        PopupRow(text: "Theme", action: {
+            themePickerOpen = true
+            refreshPopup()
+        }),
     ]
+}
+
+func notificationPrefPlist() -> [String: Any] {
+    let url = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Preferences/com.apple.ncprefs.plist")
+    guard let data = try? Data(contentsOf: url),
+          let pl = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+    else { return [:] }
+    return pl
+}
+
+func notificationRows() -> [PopupRow] {
+    let pl = notificationPrefPlist()
+    var rows: [PopupRow] = [PopupRow(text: "messages", hero: true)]
+
+    // The system inbox store is TCC-locked, so this panel stays omacosy
+    // instead of sliding out Apple's Notification Center. Rows are
+    // painted as themed cards — accent header, tinted hover, subtitles.
+    switch pl["sort_order"] as? Int ?? 0 {
+    case 1: rows.append(PopupRow(icon: "󰒺", text: "sort by app", subtitle: "group incoming banners"))
+    default: rows.append(PopupRow(icon: "󰔠", text: "sort by recents", subtitle: "newest banners first"))
+    }
+    switch pl["content_visibility"] as? Int ?? 0 {
+    case 0: rows.append(PopupRow(icon: "󰈉", text: "previews off", subtitle: "hide banner body"))
+    case 1: rows.append(PopupRow(icon: "󰈈", text: "previews unlocked", subtitle: "show body after unlock"))
+    default: rows.append(PopupRow(icon: "󰈈", text: "previews always", subtitle: "show banner body"))
+    }
+    if (pl["summarize_previews"] as? Bool) == true {
+        rows.append(PopupRow(icon: "󰊪", text: "summarize on", subtitle: "stack similar banners"))
+    }
+
+    rows.append(PopupRow(separator: true))
+    rows.append(PopupRow(text: "notification settings…", dim: true, action: {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
+        closePopup()
+    }))
+    rows.append(PopupRow(text: "focus settings…", dim: true, action: {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Focus-Settings.extension")!)
+        closePopup()
+    }))
+    rows.append(PopupRow(text: "system center…", dim: true, action: {
+        closePopup()
+        clickNotificationCenter()
+    }))
+    return rows
 }
 
 func popupRows(for name: String) -> [PopupRow] {
     switch name {
-    case "apple": return appleMenuRows()
+    case "apple": return themePickerOpen ? themePickerRows() : appleMenuRows()
     case "clock": return calendarRows()
     case "weather": return weatherRows()
     case "brightness": return brightnessRows()
     case "volume": return volumeRows()
     case "wifi": return wifiRows()
     case "bluetooth": return bluetoothRows()
-    case "appmenu": return appMenuRows()
+    case "notifications": return notificationRows()
     default: return []
     }
 }
@@ -1736,6 +1868,47 @@ func popupRows(for name: String) -> [PopupRow] {
 // the command runs with no native menu ever appearing. A navigation
 // stack lives for the popup's lifetime; "‹" walks back up.
 var appMenuStack: [(title: String, element: AXUIElement)] = []
+var themePickerOpen = false
+
+func availableThemes() -> [String] {
+    let dir = NSHomeDirectory() + "/.local/share/omacosy/themes"
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+    return names.filter { name in
+        guard !name.hasPrefix(".") else { return false }
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: dir + "/" + name, isDirectory: &isDir)
+        return isDir.boolValue
+    }.sorted()
+}
+
+func currentThemeName() -> String {
+    let link = NSHomeDirectory() + "/.config/omarchy/current/theme"
+    guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: link) else { return "" }
+    return URL(fileURLWithPath: dest).lastPathComponent
+}
+
+func themePickerRows() -> [PopupRow] {
+    var rows = [PopupRow(icon: "‹", text: "Theme", action: {
+        themePickerOpen = false
+        refreshPopup()
+    })]
+    let current = currentThemeName()
+    let set = NSHomeDirectory() + "/.local/bin/theme-set"
+    for name in availableThemes() {
+        rows.append(PopupRow(
+            text: name.replacingOccurrences(of: "-", with: " "),
+            highlight: name == current,
+            action: {
+                themePickerOpen = false
+                closePopup()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    _ = shell(set, [name])
+                }
+            }
+        ))
+    }
+    return rows
+}
 
 private func axChildren(_ element: AXUIElement) -> [AXUIElement] {
     var ref: CFTypeRef?
@@ -1860,50 +2033,26 @@ func appleMenuRows() -> [PopupRow] {
     var rows = rowsForMenu(apple, collapseAlternates: true)
     guard !rows.isEmpty else { return appleRows() }
     if rows.last?.separator != true { rows.append(PopupRow(separator: true)) }
-    rows.append(PopupRow(text: "Next Theme", dim: true, action: {
+    rows.append(PopupRow(text: "Screensaver", action: {
         closePopup()
         DispatchQueue.global(qos: .userInitiated).async {
-            _ = shell("\(NSHomeDirectory())/.local/bin/theme-next", [])
+            _ = shell("\(NSHomeDirectory())/.local/bin/omacosy-launch-screensaver", [])
         }
+    }))
+    rows.append(PopupRow(text: "Theme", action: {
+        themePickerOpen = true
+        refreshPopup()
     }))
     return rows
 }
 
 func appMenuRows() -> [PopupRow] {
-    let opts = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-    guard AXIsProcessTrustedWithOptions(opts) else {
-        return [PopupRow(text: "grant Accessibility to omacosy-bar", hero: true),
-                PopupRow(text: "System Settings opened the pane — toggle the bar on,", dim: true),
-                PopupRow(text: "then click the app name again", dim: true)]
-    }
-    // drilled into a menu: its items, behind a back row
-    if let top = appMenuStack.last {
-        var rows = [PopupRow(icon: "‹", text: top.title, highlight: true, action: {
-            appMenuStack.removeLast()
-            refreshPopup()
-        })]
-        rows.append(contentsOf: rowsForMenu(top.element, context: top.title))
-        return rows
-    }
-    // NOT frontmostApplication: the click that opens this popup makes
-    // the bar itself frontmost for a beat, and the popup bailed empty.
-    // model.frontApp tracks the real app and ignores our own pid.
-    guard let menubar = frontAppAXMenuBar() else {
-        tlog("appmenu: no menu bar for '\(model.frontApp)'")
-        return []
-    }
-    // no hero title: the app's name is literally the pill this popup
-    // hangs from. Index 0 is the Apple menu — our apple pill's ground.
-    var rows: [PopupRow] = []
-    for item in axChildren(menubar).dropFirst() {
-        let title = axString(item, "AXTitle")
-        guard !title.isEmpty else { continue }
-        rows.append(PopupRow(icon: "›", text: title, action: {
-            appMenuStack.append((title, item))
-            refreshPopup()
-        }))
-    }
-    if !rows.isEmpty { rows[0].highlight = true }
+    guard let top = appMenuStack.last else { return [] }
+    var rows = [PopupRow(icon: "‹", text: top.title, action: {
+        appMenuStack.removeLast()
+        refreshPopup()
+    })]
+    rows.append(contentsOf: rowsForMenu(top.element, context: top.title))
     return rows
 }
 
@@ -1924,15 +2073,16 @@ struct CheatEntry {
     let action: String
 }
 
-// "cmd-ctrl-alt-shift-1" -> "Super+Shift+1". Super IS cmd-ctrl-alt here
-// (Caps Lock sends it), so it is collapsed back into the one key the
-// user actually presses.
+// "alt-shift-1" -> "Super+Shift+1". Super is Option on this machine.
 func prettyKey(_ raw: String) -> String {
     var rest = raw
     var parts: [String] = []
     if rest.hasPrefix("cmd-ctrl-alt-") {
         parts.append("Super")
         rest = String(rest.dropFirst("cmd-ctrl-alt-".count))
+    } else if rest.hasPrefix("alt-") {
+        parts.append("Super")
+        rest = String(rest.dropFirst("alt-".count))
     }
     while let dash = rest.firstIndex(of: "-") {
         let mod = String(rest[rest.startIndex..<dash])
@@ -2267,8 +2417,8 @@ final class CheatsheetView: NSView {
         body.stroke()
 
         let title = filter.isEmpty
-            ? "keybindings — Super is Caps Lock · type to search · Super+K, Esc or click to close"
-            : "search: \(filter)▏ — \(visibleEntries().count) match\(visibleEntries().count == 1 ? "" : "es") · Esc clears"
+            ? "键位说明 — Super 是 Option（⌥） · 打字搜索 · 再点「键位」/⌥K/Esc 关闭"
+            : "搜索: \(filter)▏ — \(visibleEntries().count) 条 · Esc 清空"
         drawText(title, nerdFont("Bold", 12), palette.accent.withAlphaComponent(0.8),
                  leftAt: cheatPad, midY: bounds.maxY - cheatPad - 6)
 
@@ -2335,40 +2485,101 @@ func hideCheatsheet() {
     cheatPrevApp = nil
 }
 
+func keysGuideURL() -> URL? {
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let candidates = [
+        home.appendingPathComponent(".local/share/omacosy/docs/omacosy-键位设置.html"),
+        home.appendingPathComponent("Desktop/omacosy-键位设置.html"),
+    ]
+    return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+}
+
+func decodeHTMLText(_ raw: String) -> String {
+    var s = raw.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+    for (from, to) in [("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&")] {
+        s = s.replacingOccurrences(of: from, with: to)
+    }
+    return s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+func keysGuideEntries() -> [CheatEntry] {
+    guard let url = keysGuideURL(),
+          let html = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+    let h2Re = try! NSRegularExpression(pattern: "<h2>(.*?)</h2>", options: .dotMatchesLineSeparators)
+    let trRe = try! NSRegularExpression(pattern: #"<tr>\s*<t[dh]>(.*?)</t[dh]>\s*<t[dh]>(.*?)</t[dh]>\s*</tr>"#,
+                                        options: [.dotMatchesLineSeparators, .caseInsensitive])
+    struct Hit { var loc: Int; var heading: String?; var key: String; var action: String }
+    var hits: [Hit] = []
+    let full = NSRange(html.startIndex..., in: html)
+    h2Re.enumerateMatches(in: html, options: [], range: full) { match, _, _ in
+        guard let match, let r = Range(match.range(at: 1), in: html) else { return }
+        hits.append(Hit(loc: match.range.location, heading: decodeHTMLText(String(html[r])), key: "", action: ""))
+    }
+    trRe.enumerateMatches(in: html, options: [], range: full) { match, _, _ in
+        guard let match,
+              let r1 = Range(match.range(at: 1), in: html),
+              let r2 = Range(match.range(at: 2), in: html) else { return }
+        hits.append(Hit(loc: match.range.location, heading: nil,
+                        key: decodeHTMLText(String(html[r1])),
+                        action: decodeHTMLText(String(html[r2]))))
+    }
+    hits.sort { $0.loc < $1.loc }
+    let skip = Set(["键位", "操作", "入口", "手势", "文件", "键位 / 操作", "原来菜单里的事"])
+    var group = "键位"
+    var entries: [CheatEntry] = []
+    for hit in hits {
+        if let heading = hit.heading {
+            group = heading
+            continue
+        }
+        if skip.contains(hit.key) || hit.key.isEmpty || hit.action.isEmpty { continue }
+        entries.append(CheatEntry(group: group, key: hit.key, action: hit.action))
+    }
+    return entries
+}
+
 func toggleCheatsheet() {
     if cheatWindow != nil { hideCheatsheet(); return }
-    let entries = cheatEntries()
+    let entries = keysGuideEntries()
     guard !entries.isEmpty else {
-        tlog("cheatsheet: no bindings parsed from \(omniwmActive() ? "omniwm settings.toml" : "aerospace.toml")")
+        tlog("cheatsheet: omacosy-键位设置.html missing or empty")
         return
     }
     let view = CheatsheetView(frame: .zero)
     view.entries = entries
-    let size = view.measure()
-    view.frame = NSRect(origin: .zero, size: size)
-    // centred on the display holding the cursor, like every other
-    // full-surface thing here
     let mouse = NSEvent.mouseLocation
     let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main!
+    let measured = view.measure()
+    let maxH = screen.visibleFrame.height - 36
+    let winH = min(measured.height, maxH)
+    view.frame = NSRect(origin: .zero, size: measured)
     let window = CheatWindow(
-        contentRect: NSRect(x: screen.frame.midX - size.width / 2,
-                            y: screen.frame.midY - size.height / 2,
-                            width: size.width, height: size.height),
+        contentRect: NSRect(x: screen.visibleFrame.midX - measured.width / 2,
+                            y: screen.visibleFrame.midY - winH / 2,
+                            width: measured.width, height: winH),
         styleMask: .borderless, backing: .buffered, defer: false)
     window.isOpaque = false
     window.backgroundColor = .clear
     window.hasShadow = true
     window.level = .popUpMenu
     window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-    window.contentView = view
-    // take key so typing filters — remember the app that had focus, the
-    // close path activates it again
+    if measured.height > maxH {
+        let scroll = NSScrollView(frame: NSRect(origin: .zero,
+                                                size: NSSize(width: measured.width, height: winH)))
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.documentView = view
+        window.contentView = scroll
+    } else {
+        window.contentView = view
+    }
     cheatPrevApp = NSWorkspace.shared.frontmostApplication
     NSApp.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)
     window.makeFirstResponder(view)
     cheatWindow = window
-    tlog("cheatsheet: \(entries.count) bindings")
+    tlog("cheatsheet: \(entries.count) rows from keys html")
 }
 
 // --- view -----------------------------------------------------------------
@@ -2538,7 +2749,6 @@ final class BarView: NSView {
         itemRects.removeAll()
         mediaRects.removeAll()
         let chipFont = nerdFont("SemiBold", 13)
-        let appFont = nerdFont("Bold", 13)
         let iconFont = nerdFont("Bold", 14)
         guard let surface else { return }
 
@@ -2600,19 +2810,7 @@ final class BarView: NSView {
             x += chipBox + chipPad * 2
         }
 
-        // front-app pill — clickable: it drops the app's real menus
-        var leftEdge = bracket.maxX
-        appPillRect = .zero
-        if !model.frontApp.isEmpty {
-            let textW = advance(model.frontApp, appFont)
-            let pill = NSRect(x: bracket.maxX + gap, y: (barHeight - pillHeight) / 2,
-                              width: textW + 20, height: pillHeight)
-            palette.itemBG.setFill()
-            NSBezierPath(roundedRect: pill, xRadius: radius, yRadius: radius).fill()
-            draw(model.frontApp, appFont, palette.accent, centeredIn: pill)
-            appPillRect = pill
-            leftEdge = pill.maxX
-        }
+        let leftEdge = bracket.maxX
 
         // media: centred where there is room, in the left cluster where a
         // notch owns the middle
@@ -2629,7 +2827,7 @@ final class BarView: NSView {
             guard let item = rightItems[name], item.drawing,
                   !(item.icon.isEmpty && item.label.isEmpty) else { continue }
             let labelFont = chipFont
-            let iconColor = item.iconColor ?? palette.label
+            let iconColor = item.iconColor ?? palette.icon
             let hasIcon = !item.icon.isEmpty
             let hasLabel = !item.label.isEmpty
             // An icon-only pill is sized and centred on the glyph's INK, so
@@ -2679,22 +2877,8 @@ final class BarView: NSView {
         return itemRects.first(where: { $0.1.contains(p) })?.0
     }
 
-    var appPillRect = NSRect.zero
-
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        if appPillRect != .zero, appPillRect.contains(p), let surface {
-            appMenuStack.removeAll()
-            // clicking the bar deactivated the app, which makes its menu
-            // items read disabled and presses land nowhere — hand focus
-            // straight back while our popup (never key) stays up
-            NSWorkspace.shared.runningApplications
-                .first { $0.localizedName == model.frontApp }?
-                .activate()
-            showPopup("appmenu", under: window?.convertToScreen(convert(appPillRect, to: nil)) ?? appPillRect,
-                      on: surface, alignLeft: true)
-            return
-        }
         if appleRect.contains(p), let surface {
             appMenuStack.removeAll()
             NSWorkspace.shared.runningApplications
@@ -2702,8 +2886,14 @@ final class BarView: NSView {
                 .activate()
             // aligned to its LEFT edge: it is the leftmost thing on the bar,
             // so a right-aligned popup would hang off the screen
+            themePickerOpen = false
             showPopup("apple", under: window?.convertToScreen(convert(appleRect, to: nil)) ?? appleRect,
                       on: surface, alignLeft: true)
+            // activate() is async and steals key from the popup, so the
+            // first click on Screensaver only focused the menu.
+            DispatchQueue.main.async {
+                popupWindow?.makeKeyAndOrderFront(nil)
+            }
             return
         }
         if let ws = chipRects.first(where: { $0.1.contains(p) })?.0 {
@@ -2740,7 +2930,21 @@ final class BarView: NSView {
                 URL(string: "x-apple.systempreferences:com.apple.Battery-Settings.extension")!)
         case "activity":
             DispatchQueue.global(qos: .userInitiated).async {
-                _ = shell("/usr/bin/open", ["-na", terminalApp, "--args", "--title=omacosy-activity", "-e", "btop"])
+                // Ghostty on macOS wraps `-e btop` as
+                // `/usr/bin/login -flp $USER btop`. login(1) does not
+                // take a command, so the window only showed an error.
+                // `--command=` replaces that login wrapper entirely.
+                let run = NSHomeDirectory() + "/.local/bin/omacosy-activity"
+                let cmd = FileManager.default.isExecutableFile(atPath: run)
+                    ? run
+                    : ["/opt/homebrew/bin/btop", "/usr/local/bin/btop"]
+                        .first { FileManager.default.isExecutableFile(atPath: $0) }
+                        ?? "/opt/homebrew/bin/btop"
+                _ = shell("/usr/bin/open", [
+                    "-na", terminalApp, "--args",
+                    "--title=omacosy-activity",
+                    "--command=\(cmd)",
+                ])
             }
         default: break
         }
@@ -2947,8 +3151,54 @@ func safeTop(for display: CGRect) -> CGFloat {
     return 0
 }
 
+var ssCheckedAt = Date.distantPast
+var ssCached = false
+
+func screensaverActive() -> Bool {
+    if Date().timeIntervalSince(ssCheckedAt) < 0.2 { return ssCached }
+    ssCheckedAt = Date()
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/ps")
+    p.arguments = ["-axo", "command="]
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = FileHandle.nullDevice
+    guard (try? p.run()) != nil else {
+        ssCached = false
+        return false
+    }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    let text = String(data: data, encoding: .utf8) ?? ""
+    ssCached = omacosyScreensaverProcessVisible(in: text)
+    return ssCached
+}
+
+// The idle watcher is `…/omacosy-screensaver-idle`. A prefix contains()
+// matched it 24/7 and hid the bar after the next window event.
+func omacosyScreensaverProcessVisible(in text: String) -> Bool {
+    for raw in text.split(whereSeparator: \.isNewline) {
+        let line = String(raw)
+        if line.contains("omacosy-screensaver-idle") { continue }
+        if line.contains("omacosy-launch-screensaver") { continue }
+        if line.contains("ghostty-screensaver.conf") { return true }
+        if line.range(of: #"/omacosy-screensaver(?:\s|$)"#, options: .regularExpression) != nil {
+            return true
+        }
+    }
+    return false
+}
+
 func fullscreenDisplays() -> Set<CGDirectDisplayID> {
     var covered: Set<CGDirectDisplayID> = []
+    if screensaverActive() {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 8)
+        var n: UInt32 = 0
+        if CGGetActiveDisplayList(8, &ids, &n) == .success {
+            covered.formUnion(ids.prefix(Int(n)))
+        }
+        return covered
+    }
     // Under OmniWM the width test below cannot separate a tiled window
     // from a fullscreen one: its 0.6.3 dwindle applies no outer gaps
     // (resolved settings say 42, layout applies 0 — upstream bug, see
@@ -3004,6 +3254,31 @@ let barBaseLevel = NSWindow.Level(rawValue: -20)
 let barRevealLevel = NSWindow.Level(rawValue: 1002)
 let revealEdge: CGFloat = 2 // how close to the top edge counts as asking
 var revealed = false
+var nativeFSCheckedAt = Date.distantPast
+var nativeFSCached = false
+
+func focusedIsNativeFullscreen() -> Bool {
+    if Date().timeIntervalSince(nativeFSCheckedAt) < 0.25 { return nativeFSCached }
+    nativeFSCheckedAt = Date()
+    nativeFSCached = false
+    guard let front = NSWorkspace.shared.frontmostApplication,
+          front.bundleIdentifier != "com.omacosy.bar" else { return false }
+    let axApp = AXUIElementCreateApplication(front.processIdentifier)
+    var axWin: CFTypeRef?
+    if AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &axWin) == .success,
+       let axWin, CFGetTypeID(axWin) == AXUIElementGetTypeID() {
+        var fs: CFTypeRef?
+        if AXUIElementCopyAttributeValue(axWin as! AXUIElement, "AXFullScreen" as CFString, &fs) == .success,
+           (fs as? Bool) == true {
+            nativeFSCached = true
+            return true
+        }
+    }
+    let layout = aerospace(["list-windows", "--focused", "--format", "%{window-layout}"])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    nativeFSCached = layout == "macos_native_fullscreen"
+    return nativeFSCached
+}
 
 func setRevealed(_ show: Bool) {
     guard show != revealed else { return }
@@ -3024,11 +3299,20 @@ func pointerAtScreenTop() {
     guard let screen = NSScreen.screens.first(where: { $0.frame.insetBy(dx: 0, dy: -2).contains(p) })
     else { return }
     let fromTop = screen.frame.maxY - p.y
+    if focusedIsNativeFullscreen() {
+        // Native fullscreen: the system menu bar owns this edge (traffic
+        // lights). Do not climb the omacosy bar over them.
+        if revealed { setRevealed(false) }
+        return
+    }
+    if screensaverActive() {
+        if revealed { setRevealed(false) }
+        return
+    }
     if fromTop <= revealEdge {
-        // Climb only when fullscreen actually hides the bar. Otherwise stay
-        // at the -20 resting level so the auto-hidden native menu bar can
-        // slide in ABOVE the bar and stay clickable — app menus are
-        // unreachable by mouse without this.
+        // Climb only for AeroSpace / geometry fullscreen. Everyday use
+        // keeps the bar at -20; the native menu bar is buried separately
+        // so the two never stack on this edge.
         if fullscreenDisplays().contains(screenID(screen)) {
             setRevealed(true)
         }
@@ -3090,10 +3374,6 @@ func watch(_ path: String, create: Bool, handler: @escaping () -> Void) {
 // not an order change, not a visibility change, no event of any kind.
 // No publisher exists for it, so the commands that do the moving say so
 // themselves (omacosy-ws, and the overview's drag-reorder).
-// Super+K writes this; the bar has no key tap and should not grow one
-let cheatPath = "/tmp/omacosy-bar-cheatsheet"
-watch(cheatPath, create: true) { toggleCheatsheet() }
-
 let movedPath = "/tmp/omacosy-bar-moved"
 watch(movedPath, create: true) {
     tlog("moved poke")
@@ -3416,8 +3696,15 @@ watch(FileManager.default.homeDirectoryForCurrentUser
     let t0 = DispatchTime.now().uptimeNanoseconds
     palette = loadPalette()
     iconCache.removeAll()
+    set("notifications") { $0.icon = "󰂚"; $0.iconColor = nil }
+    set("activity") { $0.icon = "󰍛"; $0.iconColor = nil }
+    if let scroll = popupWindow?.contentView as? NSScrollView {
+        scroll.layer?.borderColor = palette.accent.cgColor
+        scroll.layer?.backgroundColor = mixColor(palette.barBG, palette.accent, 0.10).cgColor
+    }
+    if openPopup != nil { refreshPopup() }
     repaint()
-    if cheatWindow != nil { hideCheatsheet(); toggleCheatsheet() } // repaint in the new palette
+    if cheatWindow != nil { hideCheatsheet() }
     let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
     tlog(String(format: "theme %.2f ms", ms))
 }
@@ -3458,7 +3745,6 @@ revealLocalToken = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { e
     pointerAtScreenTop()
     return e
 }
-
 popupGuardToken = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { _ in
     // a click that lands in another app dismisses the popup; hover-exit
     // is the tracking areas' job
@@ -3596,7 +3882,8 @@ guard !surfaces.isEmpty else {
     exit(1)
 }
 apply(fetchSnapshot()) // blocking is fine here: the run loop has not started
-rightItems["activity"] = BarItem(icon: "󰍛", iconColor: palette.accent)
+rightItems["notifications"] = BarItem(icon: "󰂚")
+rightItems["activity"] = BarItem(icon: "󰍛")
 applyShade() // restore the level this machine was left at
 updateBattery()
 updateBrightness()
@@ -3605,5 +3892,5 @@ updateWeather()
 repaint()
 primeMedia()
 startOmniWatch() // a no-op under aerospace; the WM observer handles switches
-tlog("omacosy-bar up on " + surfaces.map { "\($0.screen.localizedName)=m\($0.monitorID)\($0.notched ? " (notched)" : "")" }.joined(separator: ", "))
+tlog("omacosy-bar up on " + surfaces.map { "\($0.screen.localizedName)=m\($0.monitorID)\($0.notched ? " (notched)" : "")" }.joined(separator: ", ") + " ax=\(AXIsProcessTrusted())")
 app.run()

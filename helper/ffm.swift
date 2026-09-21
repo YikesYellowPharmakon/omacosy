@@ -237,12 +237,12 @@ func focus(pid: pid_t, rect: CGRect, allowRaise: Bool) {
     }
 }
 
-guard AXIsProcessTrustedWithOptions(
-    ["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
+if !AXIsProcessTrusted() {
     FileHandle.standardError.write("omacosy-ffm: waiting for Accessibility permission…\n".data(using: .utf8)!)
-    // poll until granted, then continue
+    // Do not call AXIsProcessTrustedWithOptions(prompt). Combined with
+    // exit+KeepAlive after a grant, an ad-hoc rebuild shows a new
+    // unchecked row and the dialog never stops.
     while !AXIsProcessTrusted() { Thread.sleep(forTimeInterval: 1) }
-    exit(2) // relaunch (launchd KeepAlive) so the grant applies cleanly
 }
 
 // Shared by motion events and the dwell confirmation: hit-test the
@@ -311,6 +311,118 @@ func process(confirmed: Bool) {
     }
 }
 
+func trayAxCopy(_ el: AXUIElement, _ attr: String) -> CFTypeRef? {
+    var ref: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, attr as CFString, &ref) == .success else { return nil }
+    return ref
+}
+
+func trayAxChildren(_ el: AXUIElement) -> [AXUIElement] {
+    (trayAxCopy(el, kAXChildrenAttribute as String) as? [AXUIElement]) ?? []
+}
+
+func trayAxString(_ el: AXUIElement, _ attr: String) -> String {
+    (trayAxCopy(el, attr) as? String) ?? ""
+}
+
+func trayCollectItems(_ el: AXUIElement, into out: inout [AXUIElement]) {
+    let role = trayAxString(el, kAXRoleAttribute as String)
+    if role == (kAXMenuBarItemRole as String) || role == "AXMenuBarItem" {
+        out.append(el)
+    }
+    for child in trayAxChildren(el) { trayCollectItems(child, into: &out) }
+}
+
+func trayClickExtra(bundle: String, needles: [String]) -> String {
+    guard let pid = NSWorkspace.shared.runningApplications
+        .first(where: { $0.bundleIdentifier == bundle })?
+        .processIdentifier, pid != 0 else { return "no-app:\(bundle)" }
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(app, 1.0)
+    var items: [AXUIElement] = []
+    for attr in ["AXExtrasMenuBar", kAXMenuBarAttribute as String] {
+        if let ref = trayAxCopy(app, attr), CFGetTypeID(ref) == AXUIElementGetTypeID() {
+            trayCollectItems(ref as! AXUIElement, into: &items)
+        }
+    }
+    var seen: [String] = []
+    for item in items {
+        let desc = [kAXDescriptionAttribute as String,
+                    kAXTitleAttribute as String,
+                    kAXRoleDescriptionAttribute as String]
+            .map { trayAxString(item, $0) }
+            .first { !$0.isEmpty } ?? ""
+        seen.append(desc.isEmpty ? "?" : desc)
+        if needles.contains(where: { desc.localizedCaseInsensitiveContains($0) }) {
+            let err = AXUIElementPerformAction(item, kAXPressAction as CFString)
+            return err == .success ? "ok:\(desc)" : "press-fail:\(desc):\(err.rawValue)"
+        }
+    }
+    return "miss items=\(items.count) seen=\(seen.joined(separator: "|"))"
+}
+
+func traylog(_ s: String) {
+    let line = "\(Date()) \(s)\n"
+    let path = "/tmp/omacosy-ffm.log"
+    guard let data = line.data(using: .utf8) else { return }
+    if FileManager.default.fileExists(atPath: path),
+       let handle = FileHandle(forWritingAtPath: path) {
+        defer { try? handle.close() }
+        handle.seekToEndOfFile()
+        handle.write(data)
+    } else {
+        FileManager.default.createFile(atPath: path, contents: data)
+    }
+}
+
+func handleTrayRequest() {
+    let path = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".local/state/omacosy/tray-cmd").path
+    let raw = (try? String(contentsOfFile: path, encoding: .utf8))?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let kind = raw.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+    guard ["controlcenter", "notifications"].contains(kind) else { return }
+    let needles = kind == "notifications"
+        ? ["Clock", "Notification", "通知", "时钟"]
+        : ["Control Center", "控制中心"]
+    var result = trayClickExtra(bundle: "com.apple.controlcenter", needles: needles)
+    if result.hasPrefix("miss") || result.hasPrefix("no-app") {
+        let other = trayClickExtra(bundle: "com.apple.systemuiserver", needles: needles)
+        if !other.hasPrefix("miss") && !other.hasPrefix("no-app") { result = other }
+    }
+    traylog("tray \(kind) ax=\(AXIsProcessTrusted()) \(result)")
+}
+
+var trayWatch: (any DispatchSourceFileSystemObject)?
+
+func watchTrayCmd() {
+    let dir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".local/state/omacosy")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let path = dir.appendingPathComponent("tray-cmd").path
+    if !FileManager.default.fileExists(atPath: path) {
+        FileManager.default.createFile(atPath: path, contents: nil)
+    }
+    let fd = open(path, O_EVTONLY)
+    guard fd >= 0 else {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { watchTrayCmd() }
+        return
+    }
+    let src = DispatchSource.makeFileSystemObjectSource(
+        fileDescriptor: fd, eventMask: [.write, .attrib, .delete, .rename], queue: .main)
+    src.setEventHandler {
+        let ev = src.data
+        handleTrayRequest()
+        if ev.contains(.delete) || ev.contains(.rename) { src.cancel() }
+    }
+    src.setCancelHandler {
+        close(fd)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { watchTrayCmd() }
+    }
+    trayWatch = src
+    src.resume()
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
 var trailArmed = false
@@ -334,4 +446,5 @@ NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { _ in
     lastProcessAt = now
     process(confirmed: false)
 }
+watchTrayCmd()
 app.run()

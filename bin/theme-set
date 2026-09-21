@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# theme-set <name> — switch the whole desktop theme in one move.
-# Swaps ~/.config/omarchy/current/theme (the omarchy convention), then
-# nudges every consumer: Korren live-reloads on its own (it watches the
-# omarchy dir), the bar and borders both watch the theme and restyle
-# in place — nothing here has to tell them.
-
+# theme-set <name> [wallpaper] — switch desktop theme, optional wallpaper.
 set -euo pipefail
-# resolve through the ~/.local/bin symlink to the real repo
 REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 THEMES_DIR="$REPO_DIR/themes"
 CURRENT_DIR="$HOME/.config/omarchy/current"
+STATE_DIR="$HOME/.local/state/omacosy"
+BG_DIR="$STATE_DIR/bg"
 
 case "${1:-list}" in
   list)
-    for t in "$THEMES_DIR"/*/; do basename "$t"; done
+    current="$(basename "$(readlink "$CURRENT_DIR/theme" 2>/dev/null || true)")"
+    for t in "$THEMES_DIR"/*/; do
+      name="$(basename "$t")"
+      n="$(find "$t/backgrounds" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.heic' \) 2>/dev/null | wc -l | tr -d ' ')"
+      mark=""
+      [ "$name" = "$current" ] && mark=" *"
+      printf '%s  (%s walls)%s\n' "$name" "$n" "$mark"
+    done
     exit 0
     ;;
 esac
@@ -25,38 +28,67 @@ if [ ! -d "$THEMES_DIR/$NAME" ]; then
   exit 1
 fi
 
-mkdir -p "$CURRENT_DIR"
+mkdir -p "$CURRENT_DIR" "$BG_DIR"
 ln -sfn "$THEMES_DIR/$NAME" "$CURRENT_DIR/theme"
 
-# Korren: prefer its hand-tuned built-in theme when one matches; fall
-# back to live-deriving from the omarchy palette. Korren watches its
-# config file, so this repaints immediately.
 KORREN_CFG="$HOME/Library/Application Support/korren/config.toml"
 case "$NAME" in
-  tokyo-night|catppuccin|gruvbox|solarized-dark|osaka-jade|daylight) korren_theme="$NAME" ;;
+  tokyo-night|catppuccin|catppuccin-latte|gruvbox|solarized-dark|osaka-jade|daylight|everforest|rose-pine|nord|kanagawa) korren_theme="$NAME" ;;
   *) korren_theme="omarchy" ;;
 esac
 if [ -f "$KORREN_CFG" ]; then
   sed -i '' "s/^name = \".*\"/name = \"$korren_theme\"/" "$KORREN_CFG"
 fi
 
-# Wallpaper: first image in the theme's backgrounds/ dir, on every screen.
-# omacosy-helper wraps NSWorkspace (System Events wallpaper scripting
-# half-broke on macOS 14+: some desktops return "missing value" and
-# silently keep the old picture); osascript remains as fallback.
-WALL="$(ls "$THEMES_DIR/$NAME"/backgrounds/* 2>/dev/null | head -1)"
-if [ -n "$WALL" ]; then
-  # theme-bg-next cycles through the rest; a theme switch restarts the
-  # cycle at the first image, so the remembered position moves with it
-  mkdir -p "$HOME/.local/state/omacosy"
-  ln -nsf "$WALL" "$HOME/.local/state/omacosy/background"
+resolve_wall() {
+  local hint="${1:-}"
+  if [ "$hint" = "__rain__" ] || [ "$hint" = "rain" ]; then
+    if [ -f "$THEMES_DIR/$NAME/lock.png" ]; then
+      echo "$THEMES_DIR/$NAME/lock.png"
+      return
+    fi
+  fi
+  if [ -n "$hint" ]; then
+    if [ -f "$hint" ]; then
+      echo "$(cd "$(dirname "$hint")" && pwd)/$(basename "$hint")"
+      return
+    fi
+    if [ -f "$THEMES_DIR/$NAME/backgrounds/$hint" ]; then
+      echo "$THEMES_DIR/$NAME/backgrounds/$hint"
+      return
+    fi
+  fi
+  if [ "$NAME" = "enter-the-matrix" ] && [ -z "$hint" ]; then
+    if [ -f "$THEMES_DIR/$NAME/backgrounds/06-office-crt.jpg" ]; then
+      echo "$THEMES_DIR/$NAME/backgrounds/06-office-crt.jpg"
+      return
+    fi
+  fi
+  if [ -e "$BG_DIR/$NAME" ]; then
+    local prev
+    prev="$(readlink "$BG_DIR/$NAME" 2>/dev/null || true)"
+    if [ -f "$prev" ]; then
+      echo "$prev"
+      return
+    fi
+  fi
+  ls "$THEMES_DIR/$NAME"/backgrounds/* 2>/dev/null | head -1
+}
+
+WALL="$(resolve_wall "${2:-}")"
+SKIP_WALL=0
+if [ "$NAME" = "enter-the-matrix" ]; then
+  rain_hint="${2:-}"
+  if [ "$rain_hint" = "__rain__" ] || [ "$rain_hint" = "rain" ]; then
+    SKIP_WALL=1
+  fi
+fi
+if [ "$SKIP_WALL" = 0 ] && [ -n "$WALL" ] && [ -f "$WALL" ]; then
+  ln -nsf "$WALL" "$STATE_DIR/background"
+  ln -nsf "$WALL" "$BG_DIR/$NAME"
   if [ -x "$HOME/.local/bin/omacosy-helper" ]; then
     "$HOME/.local/bin/omacosy-helper" wallpaper "$WALL" >/dev/null 2>&1 || true
   else
-    # the path is an ARGUMENT, not spliced into the script text: it is a
-    # filename out of a theme pack, and a theme is third-party content.
-    # A wallpaper named  x" & (do shell script "...") & ".jpg  would
-    # otherwise close the AppleScript string and run.
     osascript - "$WALL" >/dev/null 2>&1 <<'APPLESCRIPT' || true
 on run argv
   tell application "System Events" to tell every desktop to set picture to (item 1 of argv)
@@ -65,15 +97,6 @@ APPLESCRIPT
   fi
 fi
 
-
-# omacosy-bar and omacosy-borders both re-read the theme on their own
-# (kqueue on ~/.config/omarchy/current), so the symlink swap above IS
-# the notification
-
-# OmniWM draws the focus border while it is the window manager (our
-# ring clips at screen edges there — no outer gaps). Its color lives in
-# settings.toml as 0-1 floats; write the theme's ACTIVE_COLOR
-# (0xAARRGGBB) into it — OmniWM live-reloads, so this recolors at once.
 OMNIWM_SETTINGS="$HOME/.config/omniwm/settings.toml"
 if [ -f "$OMNIWM_SETTINGS" ] && [ -f "$THEMES_DIR/$NAME/borders.sh" ]; then
   ACTIVE="$(grep -o 'ACTIVE_COLOR=0x[0-9a-fA-F]*' "$THEMES_DIR/$NAME/borders.sh" | head -1 | cut -d= -f2)"
@@ -93,4 +116,27 @@ PY
   fi
 fi
 
-echo "theme: $NAME"
+COLOR_MODE="${3:-}"
+if [ -n "$COLOR_MODE" ]; then
+  mkdir -p "$STATE_DIR/color"
+  printf '%s\n' "$COLOR_MODE" > "$STATE_DIR/color/$NAME"
+fi
+
+if [ -x "$REPO_DIR/bin/theme-pack.py" ]; then
+  python3 "$REPO_DIR/bin/theme-pack.py" apply "$THEMES_DIR/$NAME" "${WALL:-}" "${COLOR_MODE:-}" >/dev/null 2>&1 || true
+fi
+
+if [ -x "$REPO_DIR/bin/matrix-rain-ctl" ]; then
+  rain_hint="${2:-}"
+  if [ "$NAME" = "enter-the-matrix" ]; then
+    if [ "$rain_hint" = "__rain__" ] || [ "$rain_hint" = "rain" ]; then
+      "$REPO_DIR/bin/matrix-rain-ctl" apply "$NAME" "__rain__" >/dev/null 2>&1 || true
+    else
+      "$REPO_DIR/bin/matrix-rain-ctl" apply "$NAME" "${WALL:-}" >/dev/null 2>&1 || true
+    fi
+  else
+    "$REPO_DIR/bin/matrix-rain-ctl" apply "$NAME" >/dev/null 2>&1 || true
+  fi
+fi
+
+echo "theme: $NAME${WALL:+  wallpaper: $(basename "$WALL")}${COLOR_MODE:+  color: $COLOR_MODE}"

@@ -1,0 +1,26 @@
+#!/bin/bash
+# Write only the VOPARCHY banner. No tagline under the wordmark.
+
+set -euo pipefail
+
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _dir=$(cd -- "$(dirname -- "$_src")" && pwd)
+  _src=$(readlink "$_src")
+  case "$_src" in
+    /*) ;;
+    *) _src="$_dir/$_src" ;;
+  esac
+done
+here=$(cd -- "$(dirname -- "$_src")" && pwd)
+DATA_DIR="${OLIGARCHY_DATA_DIR:-$here/../share}"
+TARGET="${OLIGARCHY_SCREENSAVER_TXT:-${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/branding/screensaver.txt}"
+
+logo="$DATA_DIR/logo.txt"
+[ -r "$logo" ] || { echo "Missing data file: $logo" >&2; exit 1; }
+
+mkdir -p "$(dirname "$TARGET")"
+tmp=$(mktemp "$(dirname "$TARGET")/.screensaver.XXXXXX")
+cat "$logo" >"$tmp"
+chmod 644 "$tmp"
+mv -f "$tmp" "$TARGET"

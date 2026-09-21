@@ -1,8 +1,7 @@
 # AeroSpace template — i3-like tiling with omarchy's keybinding scheme.
 # @PLACEHOLDERS@ are filled from config/apps.conf (+ apps.local.conf)
 # by install.sh, which writes the real aerospace.toml next to this file.
-# "Super" = Caps Lock, remapped by Karabiner to cmd+ctrl+alt — a combo
-# nothing on macOS uses, so bindings never collide with typing or apps.
+# Super = Option (⌥). Command stays macOS. Caps Lock stays Caps Lock.
 # Docs: https://nikitabobko.github.io/AeroSpace/guide
 
 config-version = 2
@@ -11,7 +10,9 @@ persistent-workspaces = ['1', '2', '3', '4', '5', '6', '7', '8', '9',
 
 start-at-login = true
 after-login-command = []
-after-startup-command = []
+after-startup-command = [
+  'exec-and-forget /bin/bash -c "$HOME/.local/bin/omacosy-tray --ensure-watch"'
+]
 
 # flatten is OFF because it dissolves the very container `split` makes,
 # and `split` is how the dwindle direction gets set (see below).
@@ -46,12 +47,12 @@ on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
 # keyboard commands AND for the focus omacosy-ffm moves under the mouse
 # (it does notice those, despite moving focus via SLPS itself).
 # AEROSPACE_WINDOW_ID names the newly focused window.
-on-focus-changed = ['exec-and-forget $HOME/.local/bin/omacosy-helper split-hint']
+on-focus-changed = ['exec-and-forget /bin/bash -c "$HOME/.local/bin/omacosy-helper split-hint; $HOME/.local/bin/omacosy-tray --ensure-watch"']
 
 # Tell the bar which workspace is focused — a bash builtin redirect,
 # no extra process, and a regular file so a dead reader cannot wedge it
 exec-on-workspace-change = ['/bin/bash', '-c',
-  'touch /tmp/omacosy-ws-switch; echo "$AEROSPACE_FOCUSED_WORKSPACE" > /tmp/omacosy-bar-ws; $HOME/.local/bin/omacosy-focus-guard'
+  'touch /tmp/omacosy-ws-switch; echo "$AEROSPACE_FOCUSED_WORKSPACE" > /tmp/omacosy-bar-ws; $HOME/.local/bin/omacosy-focus-guard; $HOME/.local/bin/omacosy-tray --ensure-watch'
 ]
 
 [gaps]
@@ -60,10 +61,11 @@ inner.vertical = 8
 outer.left = 8
 outer.bottom = 8
 outer.right = 8
-# room for the bar: measured from the display top on flat monitors,
-# but from below the notch strip on built-in notched displays (macOS
-# reports usable space starting there), so the laptop needs less
-outer.top = [{ monitor.'built-in' = 10 }, 42]
+# room for the 34px bar + 8px breathing. Official omacosy uses 10 on
+# notched built-ins (usable space already starts below the notch). This
+# machine's built-in reports no notch, so it needs the flat-monitor gap
+# or tiled windows sit under the bar and the top edge looks wrong.
+outer.top = 42
 
 # Fixed-size settings windows fight the tiler (resize -> snap back ->
 # relayout flicker); float them instead.
@@ -80,128 +82,110 @@ run = 'layout floating'
 if.window-title-regex-substring = 'omacosy-activity'
 run = 'layout floating'
 
-# Omarchy's map, Super = Caps Lock (cmd-ctrl-alt). Two layers, like
-# omarchy: Super for window management, Super+Shift for moving and apps.
+# Official Omarchy screensaver is a fullscreen terminal overlay, not a tile.
+[[on-window-detected]]
+if.app-id = 'com.mitchellh.ghostty'
+if.window-title-regex-substring = 'omacosy-screensaver'
+run = ['layout floating', 'fullscreen on --no-outer-gaps']
+
+# Super = Option (⌥). Command stays macOS (copy/paste/tabs/quit/Cmd+Tab).
+# Caps Lock is Caps Lock again (Chinese IME). No Karabiner Super remap.
+# When Super is Option, Omarchy's Super+Tab and Alt+Tab are the same
+# physical key: Super+Tab wins (next workspace). Cycle windows on Super+`.
+# Cmd+Tab is still the macOS app switcher.
 [mode.main.binding]
 # Terminal / browser (omarchy: Super+Return, Super+Shift+Return)
-# through omacosy-spawn: spawns are serialized so each window's dwindle
-# split hint lands before the next window opens — spamming this chord
-# gives a clean spiral instead of a simultaneous flat pile
-cmd-ctrl-alt-enter = 'exec-and-forget $HOME/.local/bin/omacosy-spawn "@TERMINAL@"'
-cmd-ctrl-alt-shift-enter = 'exec-and-forget open -a "@BROWSER@"'
+alt-enter = 'exec-and-forget $HOME/.local/bin/omacosy-spawn "@TERMINAL@"'
+alt-shift-enter = 'exec-and-forget open -a "@BROWSER@"'
 
-# Launcher (omarchy: Super+Space)
-cmd-ctrl-alt-space = 'exec-and-forget open -a Raycast'
+# Launcher (omarchy: Super+Space). Cmd+Space stays Spotlight.
+alt-space = 'exec-and-forget /usr/bin/open -a Spotlight'
 
-# Close window (omarchy: Super+W)
-cmd-ctrl-alt-w = 'close'
+# Close window (omarchy: Super+W / Super+Q). Cmd+W stays close-tab.
+alt-w = 'close'
+alt-q = 'close'
 
-# Focus (omarchy: Super+Arrows)
-cmd-ctrl-alt-left = 'focus left'
-cmd-ctrl-alt-down = 'focus down'
-cmd-ctrl-alt-up = 'focus up'
-cmd-ctrl-alt-right = 'focus right'
+# Focus (omarchy: Super+Arrows). Option+Arrows no longer jumps words;
+# use Ctrl+Arrows or Cmd+Arrows in text instead.
+alt-left = 'focus left'
+alt-down = 'focus down'
+alt-up = 'focus up'
+alt-right = 'focus right'
 
 # Move windows (omarchy: Super+Shift+Arrows)
-cmd-ctrl-alt-shift-left = 'move left'
-cmd-ctrl-alt-shift-down = 'move down'
-cmd-ctrl-alt-shift-up = 'move up'
-cmd-ctrl-alt-shift-right = 'move right'
+alt-shift-left = 'move left'
+alt-shift-down = 'move down'
+alt-shift-up = 'move up'
+alt-shift-right = 'move right'
 
-# Layout (omarchy: Super+T float toggle, Super+J split toggle, Super+F fullscreen)
-cmd-ctrl-alt-t = 'layout floating tiling'
-# Keybinding cheatsheet (omarchy: Super+K) — the bar renders it from
-# THIS file, so the sheet cannot drift from the keys it documents.
-cmd-ctrl-alt-k = 'exec-and-forget /usr/bin/touch /tmp/omacosy-bar-cheatsheet'
-
-# Floats
-# Surface the next float on this workspace (S for surface). macOS
-# z-orders windows per APP, so a float sinks behind whichever app you
-# focus next and cannot be pinned on top without a private window-level
-# call; this is how you get it back, cursor and all.
-cmd-ctrl-alt-s = 'exec-and-forget $HOME/.local/bin/omacosy-float'
-# wrapper-aware: the dwindle hint's solo container makes the bare
-# commands no-op or misfire (issue #3) — omacosy-layout compensates
-cmd-ctrl-alt-j = 'exec-and-forget $HOME/.local/bin/omacosy-layout togglesplit'
-cmd-ctrl-alt-f = 'fullscreen --no-outer-gaps'
-# native (green-button) fullscreen: the only mode that may claim the
-# notch strip on the built-in display; deliberate enter/exit only
-cmd-ctrl-alt-n = 'macos-native-fullscreen'
+# Layout (omarchy: Super+T float, Super+J split, Super+F fullscreen)
+alt-t = 'layout floating tiling'
+alt-s = 'exec-and-forget $HOME/.local/bin/omacosy-float'
+alt-j = 'exec-and-forget $HOME/.local/bin/omacosy-layout togglesplit'
+alt-f = 'fullscreen --no-outer-gaps'
+# native (green-button) fullscreen: a separate Space. Hover the top
+# edge to get the auto-hidden menu bar and the traffic lights.
+alt-n = 'macos-native-fullscreen'
 
 # Resize (omarchy: Super+Minus / Super+Equal)
-cmd-ctrl-alt-minus = 'exec-and-forget $HOME/.local/bin/omacosy-layout resize -50'
-cmd-ctrl-alt-equal = 'exec-and-forget $HOME/.local/bin/omacosy-layout resize +50'
+alt-minus = 'exec-and-forget $HOME/.local/bin/omacosy-layout resize -50'
+alt-equal = 'exec-and-forget $HOME/.local/bin/omacosy-layout resize +50'
 
-# Workspaces (omarchy: Super+N, Super+Shift+N, Super+Tab)
-cmd-ctrl-alt-1 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 1'
-cmd-ctrl-alt-2 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 2'
-cmd-ctrl-alt-3 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 3'
-cmd-ctrl-alt-4 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 4'
-cmd-ctrl-alt-5 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 5'
-cmd-ctrl-alt-6 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 6'
-cmd-ctrl-alt-7 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 7'
-cmd-ctrl-alt-8 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 8'
-cmd-ctrl-alt-9 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 9'
+# Workspaces (omarchy: Super+N, Super+Shift+N)
+alt-1 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 1'
+alt-2 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 2'
+alt-3 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 3'
+alt-4 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 4'
+alt-5 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 5'
+alt-6 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 6'
+alt-7 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 7'
+alt-8 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 8'
+alt-9 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 9'
 
-cmd-ctrl-alt-shift-1 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 1 move'
-cmd-ctrl-alt-shift-2 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 2 move'
-cmd-ctrl-alt-shift-3 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 3 move'
-cmd-ctrl-alt-shift-4 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 4 move'
-cmd-ctrl-alt-shift-5 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 5 move'
-cmd-ctrl-alt-shift-6 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 6 move'
-cmd-ctrl-alt-shift-7 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 7 move'
-cmd-ctrl-alt-shift-8 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 8 move'
-cmd-ctrl-alt-shift-9 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 9 move'
+alt-shift-1 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 1 move'
+alt-shift-2 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 2 move'
+alt-shift-3 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 3 move'
+alt-shift-4 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 4 move'
+alt-shift-5 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 5 move'
+alt-shift-6 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 6 move'
+alt-shift-7 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 7 move'
+alt-shift-8 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 8 move'
+alt-shift-9 = 'exec-and-forget $HOME/.local/bin/omacosy-ws 9 move'
 
-# Workspace navigation (omarchy: Super+Tab / Super+Shift+Tab). These
-# cycle within the focused MONITOR's own set — aerospace's own
-# `workspace next` walks every workspace on the machine and hops
-# displays, and undocked it wanders into the parked 11-19 guests.
-cmd-ctrl-alt-tab = 'exec-and-forget $HOME/.local/bin/omacosy-ws 0 next'
-cmd-ctrl-alt-shift-tab = 'exec-and-forget $HOME/.local/bin/omacosy-ws 0 prev'
-# Back-and-forth
-# Super+Tab is spent on the above, so omarchy puts it on
-# Super+Ctrl+Tab, which we cannot express: Super IS cmd+ctrl+alt, so
-# ctrl and alt are already spent and only Shift is left as a layer.
-cmd-ctrl-alt-b = 'workspace-back-and-forth'
+# Workspace navigation (omarchy: Super+Tab / Super+Shift+Tab / Super+Ctrl+Tab)
+alt-tab = 'exec-and-forget $HOME/.local/bin/omacosy-ws 0 next'
+alt-shift-tab = 'exec-and-forget $HOME/.local/bin/omacosy-ws 0 prev'
+ctrl-alt-tab = 'workspace-back-and-forth'
 
-# Cycle windows WITHIN the workspace (omarchy: Alt+Tab). macOS's own
-# switcher is Cmd+Tab and switches APPS; nothing reaches a third window
-# on a workspace without this.
-# Not `focus dfs-next`: it ignores --boundaries workspace, measured — it
-# walked from a window on workspace 3 to Slack on 4 and then Arc on 1.
-# omacosy-cycle walks this workspace's own window list instead, floats
-# included, so it is also the one switcher that reaches a sunken float.
-alt-tab = 'exec-and-forget $HOME/.local/bin/omacosy-cycle next'
-alt-shift-tab = 'exec-and-forget $HOME/.local/bin/omacosy-cycle prev'
+# Cycle windows on this workspace (omarchy Alt+Tab). Super is Option, so
+# that chord is Super+Tab above; ` is the free neighbor.
+# Cmd+Tab still switches apps; Cmd+` still cycles windows of one app.
+alt-backtick = 'exec-and-forget $HOME/.local/bin/omacosy-cycle next'
+alt-shift-backtick = 'exec-and-forget $HOME/.local/bin/omacosy-cycle prev'
 
-# Cycle focus between monitors (omarchy: Ctrl+Alt+Tab, and free here)
-ctrl-alt-tab = 'focus-monitor next --wrap-around'
+# Cycle focus between monitors
+ctrl-alt-shift-tab = 'focus-monitor next --wrap-around'
 
-# Throw window to the other monitor
-# the same slot, so the twin workspace keeps its meaning
-# (whole-workspace moves conflict with the per-monitor assignment)
-cmd-ctrl-alt-shift-o = 'exec-and-forget $HOME/.local/bin/omacosy-ws 0 throw'
-# Throw the whole workspace
-# every window, to its twin on the other monitor
-cmd-ctrl-alt-shift-space = 'exec-and-forget $HOME/.local/bin/omacosy-ws 0 throw-all'
+# Throw window / whole workspace to the other monitor
+alt-shift-o = 'exec-and-forget $HOME/.local/bin/omacosy-ws 0 throw'
+alt-shift-space = 'exec-and-forget $HOME/.local/bin/omacosy-ws 0 throw-all'
 
 # Apps (omarchy: Super+Shift+letter)
-cmd-ctrl-alt-shift-f = 'exec-and-forget open ~'          # files
-cmd-ctrl-alt-shift-m = 'exec-and-forget open -a "@MUSIC@"' # music
-cmd-ctrl-alt-shift-g = 'exec-and-forget open -a "@MESSENGER@"'   # messenger (omarchy: G)
+alt-shift-f = 'exec-and-forget open ~'
+alt-shift-m = 'exec-and-forget open -a "@MUSIC@"'
+alt-shift-g = 'exec-and-forget open -a "@MESSENGER@"'
 
-# Lock the screen (omarchy: Super+Ctrl+L — ctrl is spent, so Shift+L)
-cmd-ctrl-alt-shift-l = 'exec-and-forget $HOME/.local/bin/omacosy-helper lock'
+# Lock (omarchy: Super+Ctrl+L)
+ctrl-alt-l = 'exec-and-forget $HOME/.local/bin/omacosy-helper lock'
 
-# Theme cycle
-# T for theme; float lives on plain Super+T
-cmd-ctrl-alt-shift-t = 'exec-and-forget $HOME/.local/bin/theme-next'
-cmd-ctrl-alt-shift-b = 'exec-and-forget $HOME/.local/bin/theme-bg-next'
+# Theme / wallpaper
+alt-shift-t = 'exec-and-forget $HOME/.local/bin/theme-next'
+alt-shift-b = 'exec-and-forget $HOME/.local/bin/theme-bg-next'
+# wallpaper/color pickers removed — last chosen color stays with each theme
 
 # Modes
-cmd-ctrl-alt-r = 'mode resize'
-cmd-ctrl-alt-shift-semicolon = 'mode service'
+alt-r = 'mode resize'
+alt-shift-semicolon = 'mode service'
 
 [mode.resize.binding]
 h = 'resize width -50'

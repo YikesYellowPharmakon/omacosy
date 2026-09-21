@@ -1,0 +1,201 @@
+#!/bin/bash
+# Idle watcher: launch the Ghostty VOPARCHY screensaver and skip the system .saver.
+#
+# Delay, in order:
+#   1. OMACOSY_SS_IDLE (seconds)
+#   2. ~/.local/state/omacosy/ss-idle (seconds)
+#   3. Lock Screen "Turn display off when inactive" via `pmset displaysleep`
+# After the saver has been up this long, drop caffeinate and sleep the panel:
+#   ~/.local/state/omacosy/ss-display-off (seconds), else 300.
+# Idle means IOHIDSystem HIDIdleTime (no key / mouse / trackpad).
+# Video/audio that holds PreventUserIdleDisplaySleep is treated as "in use".
+
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+LAUNCH="$HOME/.local/bin/omacosy-launch-screensaver"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omacosy"
+CAFF_PIDFILE="$STATE/ss-caffeinate.pid"
+LOG="${TMPDIR:-/tmp}/omacosy-ss-idle.log"
+mkdir -p "$STATE"
+
+# Never let the system .saver race us.
+defaults -currentHost write com.apple.screensaver idleTime -int 0 >/dev/null 2>&1 || true
+
+read_idle_limit() {
+  if [ -n "${OMACOSY_SS_IDLE:-}" ] && [ "$OMACOSY_SS_IDLE" -gt 0 ] 2>/dev/null; then
+    echo "$OMACOSY_SS_IDLE"
+    return
+  fi
+  if [ -f "$STATE/ss-idle" ]; then
+    local file
+    file=$(tr -cd '0-9' <"$STATE/ss-idle" || true)
+    if [ -n "$file" ] && [ "$file" -gt 0 ]; then
+      echo "$file"
+      return
+    fi
+  fi
+  local minutes
+  # awk exits early; ignore the SIGPIPE from pmset (pipefail + set -e).
+  minutes=$(pmset -g 2>/dev/null | awk '/^[[:space:]]*displaysleep/ {print int($2); exit}' || true)
+  if [ -n "${minutes:-}" ] && [ "$minutes" -gt 0 ]; then
+    echo $((minutes * 60))
+    return
+  fi
+  echo 180
+}
+
+read_display_off() {
+  if [ -f "$STATE/ss-display-off" ]; then
+    local file
+    file=$(tr -cd '0-9' <"$STATE/ss-display-off" || true)
+    if [ -n "$file" ] && [ "$file" -gt 0 ]; then
+      echo "$file"
+      return
+    fi
+  fi
+  echo 300
+}
+
+launched_at() {
+  if [ -f "$STATE/ss-launched" ]; then
+    tr -cd '0-9' <"$STATE/ss-launched" || true
+  fi
+}
+
+idle_seconds() {
+  ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ { printf "%d", $NF/1000000000; exit }' || true
+}
+
+# Only real playback / display-hold. Never `|| true` here: awk exit 1
+# means "not playing", and || true would skip the saver forever.
+# Ignore our own caffeinate -d. Cursor's NoIdleSleepAssertion must not match.
+display_held_by_media() {
+  pmset -g assertions 2>/dev/null | awk '
+    /caffeinate/ { next }
+    /PreventUserIdleDisplaySleep named:/ { hold=1; why=$0 }
+    /NoDisplaySleepAssertion named:/ { hold=1; why=$0 }
+    /Playing [Vv]ideo/ { hold=1; why=$0 }
+    /Playing [Aa]udio/ { hold=1; why=$0 }
+    /Video Wake Lock/ { hold=1; why=$0 }
+    /com\.apple\.TV/ { hold=1; why=$0 }
+    /Apple ?TV/ { hold=1; why=$0 }
+    /AirPlay [Vv]ideo/ { hold=1; why=$0 }
+    /Playing on Apple TV/ { hold=1; why=$0 }
+    END {
+      if (hold) print why > "/dev/stderr"
+      exit hold ? 0 : 1
+    }
+  '
+}
+
+screen_locked() {
+  if [ -x "$HOME/.local/bin/omacosy-session-locked" ]; then
+    "$HOME/.local/bin/omacosy-session-locked" 2>/dev/null || echo 0
+  else
+    echo 0
+  fi
+}
+
+screensaver_running() {
+  pgrep -f '/bin/omacosy-screensaver$' >/dev/null 2>&1 \
+    || pgrep -f 'ghostty-screensaver.conf' >/dev/null 2>&1 \
+    || pgrep -x ttfx >/dev/null 2>&1
+}
+
+stop_caffeine() {
+  if [ -f "$CAFF_PIDFILE" ]; then
+    kill "$(cat "$CAFF_PIDFILE" 2>/dev/null)" >/dev/null 2>&1 || true
+    rm -f "$CAFF_PIDFILE"
+  fi
+}
+
+start_caffeine() {
+  stop_caffeine
+  caffeinate -d >/dev/null 2>&1 &
+  echo $! >"$CAFF_PIDFILE"
+}
+
+stop_screensaver() {
+  stop_caffeine
+  pkill -x omacosy-ss-guard >/dev/null 2>&1 || true
+  pkill -f 'ghostty.*ghostty-screensaver.conf' >/dev/null 2>&1 || true
+  pkill -f '/bin/omacosy-screensaver$' >/dev/null 2>&1 || true
+  pkill -x tte >/dev/null 2>&1 || true
+  pkill -x ttfx >/dev/null 2>&1 || true
+}
+
+lock_after_saver() {
+  if [ -x "$HOME/.local/bin/omacosy-helper" ]; then
+    "$HOME/.local/bin/omacosy-helper" lock >/dev/null 2>&1 || true
+  fi
+}
+
+LIMIT=$(read_idle_limit)
+DISPLAY_OFF=$(read_display_off)
+echo "$(date) idle watcher limit=${LIMIT}s display-off-after=${DISPLAY_OFF}s" >>"$LOG"
+
+tick=0
+while true; do
+  tick=$((tick + 1))
+  if [ $((tick % 10)) -eq 0 ]; then
+    LIMIT=$(read_idle_limit)
+    DISPLAY_OFF=$(read_display_off)
+    echo "$(date) tick limit=${LIMIT} display-off=${DISPLAY_OFF} idle=${idle:-0}" >>"$LOG"
+  fi
+  idle=$(idle_seconds)
+  idle=${idle:-0}
+  locked=$(screen_locked)
+  if [ "$locked" = "1" ]; then
+    stop_screensaver
+    sleep 1
+    continue
+  fi
+  if screensaver_running; then
+    launched=$(launched_at)
+    launched=${launched:-0}
+    now=$(date +%s)
+    if [ "$launched" -gt 0 ] && [ $((now - launched)) -ge "$DISPLAY_OFF" ]; then
+      echo "$(date) display sleep after saver $((now - launched))s" >>"$LOG"
+      stop_screensaver
+      lock_after_saver
+      pmset displaysleepnow >/dev/null 2>&1 || true
+      sleep 1
+      continue
+    fi
+  fi
+  if [ "$idle" -ge "$LIMIT" ]; then
+    media_line=$(display_held_by_media 2>&1) && media=1 || media=0
+    if [ "$media" = "1" ]; then
+      echo "$(date) skip media idle=${idle} ${media_line}" >>"$LOG"
+    elif ! screensaver_running && [ -x "$LAUNCH" ]; then
+      echo "$(date) launch idle=${idle} limit=${LIMIT}" >>"$LOG"
+      start_caffeine
+      "$LAUNCH" >>"$LOG" 2>&1 || true
+    fi
+  elif pgrep -x omacosy-ss-guard >/dev/null 2>&1 && ! screensaver_running; then
+    launched=0
+    if [ -f "$STATE/ss-launched" ]; then
+      launched=$(cat "$STATE/ss-launched" 2>/dev/null || echo 0)
+    fi
+    now=$(date +%s)
+    if [ $((now - launched)) -ge 6 ]; then
+      echo "$(date) stop orphan guard" >>"$LOG"
+      pkill -x omacosy-ss-guard >/dev/null 2>&1 || true
+      stop_caffeine
+    fi
+  elif [ "$idle" -lt 1 ] && screensaver_running; then
+    launched=0
+    if [ -f "$STATE/ss-launched" ]; then
+      launched=$(cat "$STATE/ss-launched" 2>/dev/null || echo 0)
+    fi
+    now=$(date +%s)
+    if [ $((now - launched)) -ge 4 ]; then
+      echo "$(date) stop idle=${idle}" >>"$LOG"
+      lock_after_saver
+      stop_screensaver
+    fi
+  fi
+  sleep 1
+done

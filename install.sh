@@ -238,6 +238,12 @@ if [ ! -x "$HOME/.local/bin/omacosy-ffm" ] || [ "$REPO_DIR/helper/ffm.swift" -nt
   swiftc -O -F /System/Library/PrivateFrameworks -framework SkyLight -o "$HOME/.local/bin/omacosy-ffm" "$REPO_DIR/helper/ffm.swift"
 fi
 
+# tray clicks ride ffm's Accessibility grant (same signing identifier)
+if [ ! -x "$HOME/.local/bin/omacosy-tray" ] || [ "$REPO_DIR/helper/tray.swift" -nt "$HOME/.local/bin/omacosy-tray" ]; then
+  log "Building omacosy-tray"
+  swiftc -O -o "$HOME/.local/bin/omacosy-tray" "$REPO_DIR/helper/tray.swift"
+fi
+
 # focused-window border ring (replaces JankyBorders; no permissions;
 # SkyLight for the window-server event notifications)
 if [ ! -x "$HOME/.local/bin/omacosy-borders" ] || [ "$REPO_DIR/helper/borders.swift" -nt "$HOME/.local/bin/omacosy-borders" ]; then
@@ -249,11 +255,15 @@ fi
 if security find-identity -p codesigning -v 2>/dev/null | grep -q "Apple Development"; then
   codesign -f -s "Apple Development" --identifier com.omacosy.helper "$HOME/.local/bin/omacosy-helper" 2>/dev/null || true
   codesign -f -s "Apple Development" --identifier com.omacosy.ffm "$HOME/.local/bin/omacosy-ffm" 2>/dev/null || true
+  codesign -f -s "Apple Development" --identifier omacosy-ffm "$HOME/.local/bin/omacosy-tray" 2>/dev/null || true
   codesign -f -s "Apple Development" --identifier com.omacosy.borders "$HOME/.local/bin/omacosy-borders" 2>/dev/null || true
   # the BUNDLE is signed now; the identifier is what grants key on
   codesign -f -s "Apple Development" --identifier com.omacosy.bar "$BAR_APP" 2>/dev/null || true
   codesign -f -s "Apple Development" --identifier com.omacosy.overview "$HOME/.local/bin/omacosy-overview" 2>/dev/null || true
 else
+  # keep tray on ffm's existing ad-hoc identity so Notification Center
+  # clicks do not need a second Accessibility grant
+  codesign -f -s - --identifier omacosy-ffm "$HOME/.local/bin/omacosy-tray" 2>/dev/null || true
   log "NOTE: no Apple Development signing identity found."
   log "  macOS ties permission grants to the binary's signature — without a"
   log "  stable identity, every rebuild (each install.sh re-run) invalidates"
@@ -330,10 +340,12 @@ launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" 2>/dev/null 
 launchctl load "$HOME/Library/LaunchAgents/com.omacosy.bar.plist"
 link "$REPO_DIR/bin/theme-set"  "$HOME/.local/bin/theme-set"
 link "$REPO_DIR/bin/theme-next" "$HOME/.local/bin/theme-next"
+link "$REPO_DIR/bin/theme-pick" "$HOME/.local/bin/theme-pick"
 link "$REPO_DIR/bin/theme-bg-next" "$HOME/.local/bin/theme-bg-next"
 link "$REPO_DIR/bin/omacosy-toggle" "$HOME/.local/bin/omacosy-toggle"
 link "$REPO_DIR/bin/omacosy-ws" "$HOME/.local/bin/omacosy-ws"
 link "$REPO_DIR/bin/omacosy-focus-guard" "$HOME/.local/bin/omacosy-focus-guard"
+link "$REPO_DIR/bin/omacosy-exit-native-fs" "$HOME/.local/bin/omacosy-exit-native-fs"
 link "$REPO_DIR/bin/omacosy-ws-collapse" "$HOME/.local/bin/omacosy-ws-collapse"
 link "$REPO_DIR/bin/omacosy-update" "$HOME/.local/bin/omacosy-update"
 link "$REPO_DIR/bin/omacosy-spawn" "$HOME/.local/bin/omacosy-spawn"

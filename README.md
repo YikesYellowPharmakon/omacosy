@@ -1,5 +1,8 @@
 # omacosy
 
+> 本仓库是在 [paulsp94/omacosy](https://github.com/paulsp94/omacosy) 之上的个人定制，并参考了 [omarchy](https://omarchy.org)。
+> This is a personal customization of [omacosy](https://github.com/paulsp94/omacosy) by [paulsp94](https://github.com/paulsp94). The original project is inspired by [omarchy](https://omarchy.org). Please star and support the upstream repo.
+
 omakase + macOS + cosy. An [omarchy](https://omarchy.org)-style setup
 for macOS: tiling window management with a real Super key and
 Hyprland's dwindle layout, a status bar built for it (bar, popups,
@@ -27,9 +30,12 @@ details are under [What's inside](#whats-inside).
 ## Fresh Mac
 
 ```sh
-git clone https://github.com/paulsp94/omacosy.git ~/.local/share/omacosy &&
+git clone https://github.com/YikesYellowPharmakon/omacosy.git ~/.local/share/omacosy &&
 cd ~/.local/share/omacosy && ./install.sh
 ```
+
+The original project this rice is based on is
+[paulsp94/omacosy](https://github.com/paulsp94/omacosy).
 
 The clone location matters. Configs are symlinked into the repo, and
 macOS privacy (TCC) blocks launchd services from reading `~/Documents`,
@@ -556,7 +562,14 @@ that leaves all Homebrew packages in place.
 
 ## License & credits
 
-MIT (see `LICENSE`). Standing on: [omarchy](https://omarchy.org)
+MIT (see `LICENSE`).
+
+**Based on [omacosy](https://github.com/paulsp94/omacosy)** by
+[paulsp94](https://github.com/paulsp94). This tree keeps that license
+and history; the local changes are a personal rice (themes, Ghostty
+screensaver, Theme picker, and related chrome).
+
+Also standing on: [omarchy](https://omarchy.org)
 (the whole idea, plus MIT-licensed theme palettes and wallpapers),
 [AeroSpace](https://github.com/nikitabobko/AeroSpace),
 [Karabiner-Elements](https://karabiner-elements.pqrs.org),

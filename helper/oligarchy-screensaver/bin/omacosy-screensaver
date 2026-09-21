@@ -1,0 +1,155 @@
+#!/bin/bash
+# Official Omarchy screensaver loop: ttfx/tte on VOPARCHY at 120 fps.
+# Shuffle the full catalog; do not repeat an effect until every one has played.
+
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/Library/Python/3.14/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _dir=$(cd -- "$(dirname -- "$_src")" && pwd)
+  _src=$(readlink "$_src")
+  case "$_src" in
+    /*) ;;
+    *) _src="$_dir/$_src" ;;
+  esac
+done
+here=$(cd -- "$(dirname -- "$_src")" && pwd)
+TXT="${OLIGARCHY_SCREENSAVER_TXT:-$HOME/.config/omarchy/branding/screensaver.txt}"
+TTE=""
+if command -v ttfx >/dev/null 2>&1; then
+  TTE=$(command -v ttfx)
+elif command -v tte >/dev/null 2>&1; then
+  TTE=$(command -v tte)
+else
+  echo "tte/ttfx not found" >&2
+  exit 1
+fi
+
+"$here/oligarchy-screensaver-text"
+printf '\033]11;rgb:00/00/00\007'
+
+exit_screensaver() {
+  if [ -n "${TPID:-}" ]; then
+    kill "$TPID" 2>/dev/null || true
+  fi
+  pkill -x tte 2>/dev/null || true
+  pkill -x ttfx 2>/dev/null || true
+  exit 0
+}
+trap exit_screensaver INT TERM HUP QUIT EXIT
+
+LOG="${TMPDIR:-/tmp}/omacosy-ss.log"
+wait_for_terminal_resize() {
+  local deadline=$((SECONDS + 8)) size rows cols
+  while ((SECONDS < deadline)); do
+    size=$(stty size 2>/dev/null || echo "0 0")
+    rows=${size%% *}
+    cols=${size##* }
+    echo "$(date) stty=$size engine=$TTE" >>"$LOG"
+    if [ "${cols:-0}" -ge 120 ] && [ "${rows:-0}" -ge 24 ]; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  echo "$(date) resize timeout stty=$(stty size 2>/dev/null)" >>"$LOG"
+}
+wait_for_terminal_resize
+
+# Shuffle the engine catalog once per cycle. Play each effect exactly once
+# before reshuffling. Do not pass per-effect flags.
+load_effects() {
+  effects=()
+  while IFS= read -r e; do
+    case "$e" in
+      ''|help) continue ;;
+    esac
+    effects+=("$e")
+  done < <("$TTE" --help 2>/dev/null | awk '
+    /^Commands:/ { p=1; next }
+    p && /^Options:/ { exit }
+    p && $1 ~ /^[a-z][a-z0-9]*$/ { print $1 }
+  ')
+  if [ "${#effects[@]}" -lt 2 ]; then
+    effects=(
+      beams binarypath blackhole bouncyballs bubbles burn colorshift crumble
+      decrypt errorcorrect expand fireworks highlight laseretch matrix middleout
+      orbittingvolley overflow pour print rain randomsequence rings scattered
+      slice slide smoke spotlights spray swarm sweep synthgrid thunderstorm
+      unstable vhstape waves wipe
+    )
+  fi
+}
+
+refill_bag() {
+  bag=("${effects[@]}")
+  local i j tmp
+  i=${#bag[@]}
+  while [ "$i" -gt 1 ]; do
+    i=$((i - 1))
+    j=$((RANDOM % (i + 1)))
+    tmp=${bag[$i]}
+    bag[$i]=${bag[$j]}
+    bag[$j]=$tmp
+  done
+}
+
+effects=()
+bag=()
+load_effects
+refill_bag
+echo "$(date) loop engine=$TTE fps=120 catalog=${#effects[@]}" >>"$LOG"
+
+TPID=""
+winched=0
+current=""
+on_winch() {
+  echo "$(date) SIGWINCH $(stty size 2>/dev/null)" >>"$LOG"
+  winched=1
+  if [ -n "$TPID" ]; then
+    kill "$TPID" 2>/dev/null || true
+  fi
+}
+trap on_winch WINCH
+
+reuse=()
+while true; do
+  if [ -z "$current" ]; then
+    if [ "${#bag[@]}" -eq 0 ]; then
+      refill_bag
+    fi
+    current=${bag[0]}
+    if [ "${#bag[@]}" -le 1 ]; then
+      bag=()
+    else
+      bag=("${bag[@]:1}")
+    fi
+  fi
+  "$TTE" -i "$TXT" \
+    --frame-rate 120 \
+    --canvas-width 0 \
+    --canvas-height 0 \
+    "${reuse[@]}" \
+    --anchor-canvas c \
+    --anchor-text c \
+    --no-eol \
+    --no-restore-cursor \
+    --terminal-background-color 000000 \
+    "$current" &
+  TPID=$!
+  reuse=(--reuse-canvas)
+  echo "$(date) start effect=$current stty=$(stty size 2>/dev/null)" >>"$LOG"
+  while kill -0 "$TPID" 2>/dev/null; do
+    if read -r -n1 -t 1; then
+      trap - EXIT
+      exit_screensaver
+    fi
+  done
+  wait "$TPID" 2>/dev/null || true
+  if [ "$winched" -eq 1 ]; then
+    winched=0
+    continue
+  fi
+  current=""
+done

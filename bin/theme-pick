@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""Interactive theme, wallpaper, and color picker for omacosy."""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+THEMES = Path.home() / ".local/share/omacosy/themes"
+CURRENT = Path.home() / ".config/omarchy/current/theme"
+STATE = Path.home() / ".local/state/omacosy"
+SET = Path.home() / ".local/share/omacosy/bin/theme-set"
+PACK = Path.home() / ".local/share/omacosy/bin/theme-pack.py"
+EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
+PAIR = __import__("re").compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"?(#?[0-9A-Fa-f]{6})"?')
+
+APPLE = [
+    ("4", "蓝"),
+    ("5", "紫"),
+    ("6", "粉"),
+    ("0", "红"),
+    ("1", "橙"),
+    ("2", "黄"),
+    ("3", "绿"),
+    ("-1", "石墨"),
+]
+PALETTE_KEYS = ("accent", "blue", "cyan", "green", "yellow", "orange", "red", "magenta", "purple")
+
+
+LOGO_NAMES = {"omarchy.webp", "omarchy.png", "omarchy.jpg", "omarchy.jpeg"}
+
+
+def is_lock_art(path: Path) -> bool:
+    name = path.name.lower()
+    if name in LOGO_NAMES or "preview" in name:
+        return False
+    size = path.stat().st_size
+    if name.startswith("unlock") and size > 80_000:
+        return True
+    if "omarchy" in name and size > 30_000:
+        return True
+    if name.startswith(("lock.", "lock-", "lock_")) and size > 30_000:
+        return True
+    return False
+
+
+def walls(theme: Path) -> list[Path]:
+    folder = theme / "backgrounds"
+    if not folder.is_dir():
+        return []
+    return sorted(
+        p
+        for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() in EXTS and not is_lock_art(p) and p.name.lower() not in {"lock.png", "lock-ui.png"}
+    )
+
+
+def current_theme() -> str:
+    try:
+        return Path(CURRENT).resolve().name
+    except Exception:
+        return ""
+
+
+def remembered_wall(name: str) -> Path | None:
+    link = STATE / "bg" / name
+    if link.is_symlink() or link.is_file():
+        target = link.resolve() if link.is_symlink() else Path(link.read_text().strip())
+        if target.is_file():
+            return target
+    return None
+
+
+def remembered_color(name: str) -> str:
+    path = STATE / "color" / name
+    if path.is_file():
+        return path.read_text(encoding="utf-8").strip() or "theme"
+    return "theme"
+
+
+def parse_colors(theme: Path) -> dict[str, str]:
+    data: dict[str, str] = {}
+    path = theme / "colors.toml"
+    if not path.is_file():
+        return data
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = PAIR.match(line.strip())
+        if match:
+            val = match.group(2)
+            data[match.group(1)] = val if val.startswith("#") else f"#{val}"
+    return data
+
+
+def choose(prompt: str, items: list[str], default: str = "") -> str | None:
+    if not items:
+        return None
+    script = """
+on run argv
+  set promptText to item 1 of argv
+  set defaultItem to item 2 of argv
+  set theList to items 3 thru -1 of argv
+  try
+    if defaultItem is "" then
+      set picked to choose from list theList with prompt promptText OK button name "应用" cancel button name "取消"
+    else
+      set picked to choose from list theList default items {defaultItem} with prompt promptText OK button name "应用" cancel button name "取消"
+    end if
+    if picked is false then return ""
+    return item 1 of picked
+  on error
+    return ""
+  end try
+end run
+"""
+    proc = subprocess.run(
+        ["/usr/bin/osascript", "-", prompt, default, *items],
+        input=script,
+        text=True,
+        capture_output=True,
+    )
+    value = (proc.stdout or "").strip()
+    return value or None
+
+
+def apply(name: str, wallpaper: Path | None, color: str | None) -> None:
+    cmd = [str(SET), name]
+    cmd.append(str(wallpaper) if wallpaper is not None else "")
+    if color:
+        cmd.append(color)
+    subprocess.run(cmd, check=False)
+
+
+def pick_theme() -> str | None:
+    names = sorted(p.name for p in THEMES.iterdir() if p.is_dir())
+    if not names:
+        return None
+    cur = current_theme()
+    labels = []
+    lookup = {}
+    for name in names:
+        count = len(walls(THEMES / name))
+        mark = "  ← 当前" if name == cur else ""
+        label = f"{name}  ·  {count} 张壁纸{mark}"
+        labels.append(label)
+        lookup[label] = name
+    default = next((label for label in labels if lookup[label] == cur), "")
+    picked = choose("选择主题", labels, default)
+    return lookup.get(picked) if picked else None
+
+
+def pick_wallpaper(name: str) -> Path | None:
+    items = walls(THEMES / name)
+    live = (STATE / "live").read_text(encoding="utf-8").strip() if (STATE / "live").is_file() else ""
+    if name == "enter-the-matrix":
+        items = [p for p in items if p.name.lower() != "void.png"]
+        if not items:
+            return None
+        remembered = remembered_wall(name)
+        labels = ["下一张", "随机一张", "动态数字雨"]
+        lookup: dict[str, Path | str] = {"下一张": "next", "随机一张": "random", "动态数字雨": "rain"}
+        for path in items:
+            label = path.stem
+            if remembered and path.resolve() == remembered.resolve() and live != "rain":
+                label = f"{label}  ← 当前"
+            labels.append(label)
+            lookup[label] = path
+        default = next(
+            (
+                key
+                for key, value in lookup.items()
+                if isinstance(value, Path) and remembered and value.resolve() == remembered.resolve()
+            ),
+            next((lab for lab in labels if "office-crt" in lab), labels[-1] if labels else "下一张"),
+        )
+        picked = choose(f"{name}：选择壁纸（{len(items)} 张静态 + 动态雨）", labels, default)
+        if not picked:
+            return None
+        value = lookup[picked]
+        if value == "rain":
+            return Path("__rain__")
+        if value == "random":
+            import random
+
+            return random.choice(items)
+        if value == "next":
+            subprocess.run([str(Path.home() / ".local/bin/theme-bg-next")], check=False)
+            return None
+        return value  # type: ignore[return-value]
+    if not items:
+        return None
+    if len(items) == 1:
+        return items[0]
+    remembered = remembered_wall(name)
+    labels = ["下一张", "随机一张", "第一张（默认）"]
+    lookup: dict[str, Path | str] = {"下一张": "next", "随机一张": "random", "第一张（默认）": items[0]}
+    for path in items:
+        label = path.stem
+        if remembered and path.resolve() == remembered.resolve():
+            label = f"{label}  ← 当前"
+        labels.append(label)
+        lookup[label] = path
+    default = next(
+        (
+            key
+            for key, value in lookup.items()
+            if isinstance(value, Path) and remembered and value.resolve() == remembered.resolve()
+        ),
+        "第一张（默认）",
+    )
+    picked = choose(f"{name}：选择壁纸（{len(items)} 张）", labels, default)
+    if not picked:
+        return None
+    value = lookup[picked]
+    if value == "random":
+        import random
+
+        return random.choice(items)
+    if value == "next":
+        subprocess.run([str(Path.home() / ".local/bin/theme-bg-next")], check=False)
+        return None
+    return value  # type: ignore[return-value]
+
+
+def color_label(mode: str, colors: dict[str, str]) -> str:
+    if mode == "theme":
+        return "主题原色（推荐）"
+    if mode == "wallpaper":
+        return "跟随壁纸自动抓取（可能不准）"
+    if mode.startswith("apple:"):
+        key = mode.split(":", 1)[1]
+        name = next((label for code, label in APPLE if code == key), key)
+        return f"系统强调色 · {name}"
+    if mode.startswith("palette:"):
+        key = mode.split(":", 1)[1]
+        hexv = colors.get(key, "")
+        return f"色板 · {key}  {hexv}".rstrip()
+    return mode
+
+
+def pick_color(name: str) -> str | None:
+    colors = parse_colors(THEMES / name)
+    current = remembered_color(name)
+    labels: list[str] = []
+    lookup: dict[str, str] = {}
+
+    def add(label: str, mode: str) -> None:
+        mark = "  ← 当前" if mode == current else ""
+        full = label + mark
+        labels.append(full)
+        lookup[full] = mode
+
+    add("主题原色（推荐）", "theme")
+    add("跟随壁纸自动抓取（可能不准）", "wallpaper")
+    for code, label in APPLE:
+        add(f"系统强调色 · {label}", f"apple:{code}")
+    seen = set()
+    for key in PALETTE_KEYS:
+        hexv = colors.get(key)
+        if not hexv or hexv.lower() in seen:
+            continue
+        seen.add(hexv.lower())
+        add(f"色板 · {key}  {hexv}", f"palette:{key}")
+    default = next((label for label, mode in lookup.items() if mode == current), labels[0])
+    picked = choose(f"{name}：选择强调色（自动抓取不准时可手选）", labels, default)
+    return lookup.get(picked) if picked else None
+
+
+def main() -> int:
+    color_only = "--color" in sys.argv or "-c" in sys.argv
+    wallpaper_only = "--wallpaper" in sys.argv or "-w" in sys.argv
+    if color_only:
+        name = current_theme()
+        if not name:
+            print("no current theme", file=sys.stderr)
+            return 1
+        color = pick_color(name)
+        if not color:
+            return 0
+        apply(name, remembered_wall(name), color)
+        return 0
+    if wallpaper_only:
+        name = current_theme()
+        if not name:
+            print("no current theme", file=sys.stderr)
+            return 1
+        wall = pick_wallpaper(name)
+        if wall is None:
+            return 0
+        apply(name, wall, None)
+        return 0
+    name = pick_theme()
+    if not name:
+        return 0
+    wall = pick_wallpaper(name)
+    color = pick_color(name)
+    apply(name, wall, color)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

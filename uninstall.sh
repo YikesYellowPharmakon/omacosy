@@ -30,6 +30,9 @@ launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" 2>/dev/n
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" "$HOME/.local/bin/omacosy-dwindle"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" "$HOME/.local/bin/omacosy-bar"
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.tray.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.omacosy.tray.plist" "$HOME/.local/bin/omacosy-tray"
+rm -f "$HOME/.local/state/omacosy/tray-cmd"
 rm -rf "$HOME/.local/share/omacosy/omacosy-bar.app"
 # overview is self-daemonizing (no launchd agent) — kill by pidfile
 # /tmp is shared. `[ -f ]` follows symlinks, so without the -L check a
@@ -149,7 +152,7 @@ fi
 
 # theme-set / theme-next out of ~/.local/bin — only when they are OUR
 # symlinks (a user's own script of the same name survives)
-for t in theme-set theme-next theme-bg-next omacosy-ws omacosy-toggle omacosy-focus-guard omacosy-ws-collapse omacosy-float omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-wm-switch omacosy-karabiner-omniwm; do
+for t in theme-set theme-next theme-bg-next omacosy-ws omacosy-toggle omacosy-focus-guard omacosy-exit-native-fs omacosy-ws-collapse omacosy-float omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-wm-switch omacosy-karabiner-omniwm; do
   target="$(readlink "$HOME/.local/bin/$t" 2>/dev/null || true)"
   case "$target" in *omacosy*) rm -f "$HOME/.local/bin/$t" ;; esac
 done

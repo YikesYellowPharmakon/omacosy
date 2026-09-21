@@ -7,7 +7,6 @@ tap "nikitabobko/tap"        # aerospace
 cask "aerospace"
 cask "karabiner-elements"  # Caps Lock -> Super
 cask "ghostty"             # default terminal + floating TUI host (btop)
-cask "raycast"             # Super+Space launcher (the binding assumes it)
 
 # CLI stack
 brew "fzf"

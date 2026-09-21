@@ -1,0 +1,10 @@
+#!/bin/bash
+# Bar activity chip: open btop in Ghostty. Absolute PATH so this does
+# not depend on login(1) or a login-shell rc.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+if command -v btop >/dev/null 2>&1; then
+  exec btop
+fi
+printf '%s\n' "btop is not installed. brew install btop"
+read -r _
+exit 1

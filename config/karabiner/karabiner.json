@@ -2,53 +2,13 @@
     "profiles": [
         {
             "complex_modifications": {
-                "rules": [
-                    {
-                        "description": "Caps Lock -> Super (cmd+ctrl+alt) when held; Escape when tapped alone",
-                        "manipulators": [
-                            {
-                                "from": {
-                                    "key_code": "caps_lock",
-                                    "modifiers": {
-                                        "optional": [
-                                            "any"
-                                        ]
-                                    }
-                                },
-                                "to": [
-                                    {
-                                        "key_code": "left_command",
-                                        "modifiers": [
-                                            "left_control",
-                                            "left_option"
-                                        ]
-                                    }
-                                ],
-                                "to_if_alone": [
-                                    {
-                                        "key_code": "escape"
-                                    }
-                                ],
-                                "type": "basic"
-                            }
-                        ]
-                    }
-                ]
+                "rules": []
             },
             "name": "omacosy",
             "selected": true,
             "virtual_hid_keyboard": {
                 "keyboard_type_v2": "ansi"
-            },
-            "devices": [
-                {
-                    "identifiers": {
-                        "is_built_in_keyboard": true,
-                        "is_keyboard": true
-                    },
-                    "manipulate_caps_lock_led": true
-                }
-            ]
+            }
         }
     ],
     "global": {

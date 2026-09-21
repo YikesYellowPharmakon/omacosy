@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+export BAR_COLOR=0xe6000000
+export BAR_BG_SOLID=0xff000000
+export ITEM_BG=0xff333333
+export ACCENT=0xff777777
+export LABEL_COLOR=0xffffffff
+export ICON_COLOR=0xffa2a2a2
+export MUTED=0xff333333
+export RED=0xff5f8787
+export GREEN=0xffdd9999
+export YELLOW=0xffa06666

@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>omacosy 键位设置</title>
+<style>
+  :root {
+    --bg: #0c100c;
+    --panel: #141a14;
+    --line: #2a3a2a;
+    --text: #e6f2e6;
+    --muted: #8aa08a;
+    --accent: #7bae4e;
+    --key: #1c261c;
+    --key-border: #3d5a3d;
+    --warn: #d4b45a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 14px/1.5 "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    padding: 36px 40px 56px;
+  }
+  header {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 20px;
+    margin-bottom: 28px;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+  }
+  .sub { color: var(--muted); font-size: 13px; }
+  .callout {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: #172117;
+    border: 1px solid var(--key-border);
+    border-radius: 8px;
+  }
+  .callout strong { color: var(--accent); }
+  h2 {
+    font-size: 16px;
+    color: var(--accent);
+    margin: 32px 0 12px;
+    letter-spacing: 0.04em;
+    text-transform: none;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--line);
+  }
+  th {
+    font-size: 12px;
+    color: var(--muted);
+    font-weight: 600;
+    background: #101610;
+  }
+  tr:last-child td { border-bottom: 0; }
+  kbd, .k {
+    display: inline-block;
+    font: 12px/1.2 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    background: var(--key);
+    border: 1px solid var(--key-border);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 2px 7px;
+    color: #d8efd8;
+    white-space: nowrap;
+  }
+  .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+  .warn { color: var(--warn); }
+  footer {
+    margin-top: 36px;
+    color: var(--muted);
+    font-size: 12px;
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+  }
+  @media print {
+    @page { size: A4; margin: 12mm 12mm 14mm; }
+    body { padding: 0; background: #fff; color: #111; }
+    header { border-bottom-color: #ccc; }
+    .callout, table { background: #fff; border-color: #ccc; }
+    th { background: #f3f3f3; color: #444; }
+    td, .sub, .note, footer { color: #222; }
+    .sub, .note, footer { color: #555; }
+    h2 { color: #3d6b24; }
+    kbd, .k {
+      background: #f4f4f4;
+      border-color: #bbb;
+      color: #111;
+    }
+    .callout { background: #f6faf2; }
+    tr { break-inside: avoid; }
+    h2 { break-after: avoid; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>omacosy 当前键位设置</h1>
+  <p class="sub">导出时间：2026-09-20 · 窗口管理器：AeroSpace · Super = Option（⌥）</p>
+  <div class="callout">
+    <strong>Super 就是 Option（⌥）</strong>。Command（⌘）继续走 macOS 原键：复制粘贴、关标签、退出 App、⌘Tab 切 App。<br>
+    Caps Lock 仍是 Caps Lock，方便中文输入法。Karabiner 没有改 Super。<br>
+    系统菜单栏平时永久隐藏，不会和顶栏叠在一起；只有系统原生全屏时，鼠标移到顶端才会滑出系统栏和三个圆钮。
+  </div>
+</header>
+
+<h2>启动与窗口</h2>
+<table>
+  <tr><th>键位</th><th>作用</th></tr>
+  <tr><td><span class="k">⌥ Enter</span></td><td>打开终端 Ghostty</td></tr>
+  <tr><td><span class="k">⌥ Shift Enter</span></td><td>打开浏览器 Safari</td></tr>
+  <tr><td><span class="k">⌥ Space</span></td><td>打开 Spotlight（搜 App、文件、菜单项、设置）</td></tr>
+  <tr><td><span class="k">⌥ W</span> 或 <span class="k">⌥ Q</span></td><td>关闭当前窗口（⌘W 仍是关标签）</td></tr>
+  <tr><td><span class="k">⌥ Shift F</span></td><td>打开家目录（Finder）</td></tr>
+  <tr><td><span class="k">⌥ Shift M</span></td><td>打开 Spotify</td></tr>
+  <tr><td><span class="k">⌥ Shift G</span></td><td>打开 Slack</td></tr>
+  <tr><td><span class="k">⌃ ⌥ L</span></td><td>立刻锁屏</td></tr>
+</table>
+
+<h2>焦点与移动</h2>
+<table>
+  <tr><th>键位</th><th>作用</th></tr>
+  <tr><td><span class="k">⌥ ←</span> <span class="k">⌥ ↓</span> <span class="k">⌥ ↑</span> <span class="k">⌥ →</span></td><td>按方向聚焦窗口（文本里跳词请用 ⌃方向 或 ⌘方向）</td></tr>
+  <tr><td><span class="k">⌥ Shift ←↓↑→</span></td><td>把当前窗口按方向挪到隔壁格子</td></tr>
+  <tr><td><span class="k">⌥ `</span></td><td>在本工作区循环窗口（含浮动窗）</td></tr>
+  <tr><td><span class="k">⌥ Shift `</span></td><td>反向循环本工作区窗口</td></tr>
+  <tr><td><span class="k">⌥ S</span></td><td>把下一个浮动窗口捞到前面，并带上鼠标</td></tr>
+</table>
+<p class="note">⌘Tab 仍是系统 App 切换；⌘` 仍是同一 App 的窗口循环。</p>
+
+<h2>布局</h2>
+<table>
+  <tr><th>键位</th><th>作用</th></tr>
+  <tr><td><span class="k">⌥ T</span></td><td>平铺 / 浮动 切换</td></tr>
+  <tr><td><span class="k">⌥ J</span></td><td>切换分割方向（横劈 / 竖劈）</td></tr>
+  <tr><td><span class="k">⌥ -</span> / <span class="k">⌥ =</span></td><td>缩小 / 放大当前窗</td></tr>
+  <tr><td><span class="k">⌥ F</span></td><td>AeroSpace 全屏：窗口盖住顶栏，仍留在当前工作区。再按一次退出。鼠标移到屏幕最顶端，顶栏会浮上来</td></tr>
+  <tr><td><span class="k">⌥ N</span></td><td>系统原生全屏（独立桌面，和绿钮一样）。圆钮在自动隐藏的菜单栏里，鼠标移到顶端即可</td></tr>
+  <tr><td><span class="k">⌥ R</span></td><td>进入调整大小模式</td></tr>
+  <tr><td><span class="k">⌥ Shift ;</span></td><td>进入服务模式</td></tr>
+</table>
+<p class="note warn">Esc 不能退出全屏。系统菜单栏平时永久隐藏，不会和顶栏叠在一起。只有系统原生全屏时，鼠标移到顶端才会滑出系统栏和三个圆钮。</p>
+
+<h2>工作区与显示器</h2>
+<table>
+  <tr><th>键位</th><th>作用</th></tr>
+  <tr><td><span class="k">⌥ 1</span> … <span class="k">⌥ 9</span></td><td>切到当前显示器的工作区 1–9</td></tr>
+  <tr><td><span class="k">⌥ Shift 1</span> … <span class="k">⌥ Shift 9</span></td><td>把窗口移到工作区 N 并跟过去</td></tr>
+  <tr><td><span class="k">⌥ Tab</span></td><td>当前显示器的下一个工作区</td></tr>
+  <tr><td><span class="k">⌥ Shift Tab</span></td><td>当前显示器的上一个工作区</td></tr>
+  <tr><td><span class="k">⌃ ⌥ Tab</span></td><td>在最近两个工作区之间来回</td></tr>
+  <tr><td><span class="k">⌃ ⌥ Shift Tab</span></td><td>焦点切到下一台显示器</td></tr>
+  <tr><td><span class="k">⌥ Shift O</span></td><td>把当前窗口扔到另一台显示器的同一槽位</td></tr>
+  <tr><td><span class="k">⌥ Shift Space</span></td><td>把整个工作区扔到另一台显示器</td></tr>
+</table>
+<p class="note">主屏工作区 1–9，外接屏 11–19，末位数字是同一槽。拔掉外接屏时，外接屏上的窗口会折进主屏空槽。</p>
+
+<h2>主题</h2>
+<table>
+  <tr><th>键位</th><th>作用</th></tr>
+  <tr><td><span class="k">⌥ Shift T</span></td><td>切到下一套主题（也可点顶栏苹果菜单里的 Next Theme）</td></tr>
+</table>
+<p class="note">现有主题：azure、enter-the-matrix、monokai-dark、snow-black。当前是 enter-the-matrix。每个主题记住上次选过的颜色，切换回来还是那套。没有单独的主题列表、壁纸选择、颜色选择快捷键。桌面数字雨默认关闭。</p>
+
+<h2>原来 menu bar 上的功能怎么用</h2>
+<p class="note warn" style="margin-top:0;margin-bottom:10px">系统 File / 编辑 / 显示 菜单栏不出现。也不再从 App 名称弹出菜单。下面这些键和入口仍然有效。</p>
+<table>
+  <tr><th>原来菜单里的事</th><th>现在怎么做</th></tr>
+  <tr><td>新窗口 / 新标签</td><td><span class="k">⌘ N</span> / <span class="k">⌘ T</span></td></tr>
+  <tr><td>打开 / 保存 / 另存为</td><td><span class="k">⌘ O</span> / <span class="k">⌘ S</span> / <span class="k">⌘ Shift S</span></td></tr>
+  <tr><td>关闭标签 / 关闭窗口 / 退出 App</td><td><span class="k">⌘ W</span> / <span class="k">⌥ W</span> / <span class="k">⌘ Q</span></td></tr>
+  <tr><td>剪切 / 复制 / 粘贴 / 全选 / 撤销 / 重做</td><td><span class="k">⌘ X</span> <span class="k">⌘ C</span> <span class="k">⌘ V</span> <span class="k">⌘ A</span> <span class="k">⌘ Z</span> <span class="k">⌘ Shift Z</span></td></tr>
+  <tr><td>查找</td><td><span class="k">⌘ F</span></td></tr>
+  <tr><td>隐藏当前 App / 隐藏其它</td><td><span class="k">⌘ H</span> / <span class="k">⌘ ⌥ H</span></td></tr>
+  <tr><td>当前 App 的设置</td><td><span class="k">⌘ ,</span></td></tr>
+  <tr><td>关于本机 / 系统设置 / 锁屏 / 睡眠 / 重启 / 关机</td><td>点顶栏左边苹果图标</td></tr>
+  <tr><td>屏保 / 下一主题</td><td>苹果菜单里的 Screensaver、Next Theme；锁屏也可用 <span class="k">⌃ ⌥ L</span></td></tr>
+  <tr><td>记不清某个菜单项</td><td><span class="k">⌥ Space</span> 或 <span class="k">⌘ Space</span> 打开 Spotlight 搜索</td></tr>
+</table>
+<p class="note">各 App 自己的 ⌘ 快捷键都还在，只是不能再用鼠标去点那条系统菜单栏。</p>
+
+<h2>调整大小模式（先按 ⌥R）</h2>
+<table>
+  <tr><th>键位</th><th>作用</th></tr>
+  <tr><td><span class="k">H</span> / <span class="k">L</span></td><td>宽度 −50 / +50</td></tr>
+  <tr><td><span class="k">J</span> / <span class="k">K</span></td><td>高度 +50 / −50</td></tr>
+  <tr><td><span class="k">-</span> / <span class="k">=</span></td><td>智能缩放</td></tr>
+  <tr><td><span class="k">Enter</span> 或 <span class="k">Esc</span></td><td>回到普通模式</td></tr>
+</table>
+
+<h2>服务模式（先按 ⌥ Shift ;）</h2>
+<table>
+  <tr><th>键位</th><th>作用</th></tr>
+  <tr><td><span class="k">Esc</span></td><td>重载 AeroSpace 配置并回到普通模式</td></tr>
+  <tr><td><span class="k">R</span></td><td>拍平当前工作区布局树</td></tr>
+  <tr><td><span class="k">Delete ⌫</span></td><td>关掉本工作区除当前以外的窗口</td></tr>
+</table>
+
+<h2>触控板手势（四指）</h2>
+<table>
+  <tr><th>手势</th><th>作用</th></tr>
+  <tr><td>四指左右滑</td><td>切换工作区（跟随系统自然滑动方向，循环到头）</td></tr>
+  <tr><td>四指上滑</td><td>打开工作区总览</td></tr>
+  <tr><td>四指向下滑</td><td>关闭工作区总览</td></tr>
+</table>
+<p class="note">系统自带的四指 Mission Control / 滑桌面已被关掉，避免和 omacosy 手势抢同一套动作。</p>
+
+<h2>工作区总览里</h2>
+<table>
+  <tr><th>键位 / 操作</th><th>作用</th></tr>
+  <tr><td>点击卡片 或 <span class="k">1</span>–<span class="k">9</span></td><td>切到对应工作区</td></tr>
+  <tr><td>拖动卡片</td><td>重排工作区</td></tr>
+  <tr><td>直接打字</td><td>按窗口标题搜索</td></tr>
+  <tr><td><span class="k">Enter</span></td><td>进入第一个搜索结果</td></tr>
+  <tr><td><span class="k">Esc</span></td><td>有搜索先清空；再按关闭总览</td></tr>
+  <tr><td>四指向下滑</td><td>关闭总览</td></tr>
+</table>
+
+<h2>顶栏（omacosy-bar）</h2>
+<table>
+  <tr><th>操作</th><th>作用</th></tr>
+  <tr><td>点左边苹果图标</td><td>About This Mac、System Settings、Lock Screen、Screensaver、Sleep、Restart、Shut Down、Next Theme。有辅助功能权限时，还会带上系统苹果菜单里的其它项</td></tr>
+  <tr><td>点工作区数字</td><td>切换工作区</td></tr>
+  <tr><td>Spotify 在播时中间的媒体胶囊</td><td>上一首 / 播放暂停 / 下一首；点歌名打开 Spotify</td></tr>
+  <tr><td>天气 / Wi-Fi / 蓝牙</td><td>点击弹出详情</td></tr>
+  <tr><td>亮度胶囊：滚轮 / 点击</td><td>调亮度；滚过 0 会继续用遮罩把屏压得更暗；弹出里还有夜览开关</td></tr>
+  <tr><td>音量胶囊：滚轮 / 点击</td><td>调音量；弹出里是滑杆和输出设备</td></tr>
+  <tr><td>电池</td><td>打开系统电池设置</td></tr>
+  <tr><td>铃铛图标</td><td>打开通知中心看消息</td></tr>
+  <tr><td>时钟</td><td>弹出月历</td></tr>
+  <tr><td>最右边活动图标</td><td>打开 Ghostty 里的 btop</td></tr>
+  <tr><td>平时 / 全屏</td><td>平时只有 omacosy 顶栏。系统菜单栏埋掉。⌥F 全屏时顶栏被盖住，鼠标移到顶端会再浮上来</td></tr>
+</table>
+
+<h2>屏保</h2>
+<table>
+  <tr><th>入口</th><th>作用</th></tr>
+  <tr><td>闲置自动</td><td>所有主题都是 Ghostty + ttfx 屏保</td></tr>
+  <tr><td>苹果菜单 → Screensaver</td><td>立刻开屏保</td></tr>
+</table>
+<p class="note">按键或点击会退出屏保。系统设置里的 ScreenSaverEngine 不是这条路径。</p>
+
+<h2>仍由 macOS 自己负责的键</h2>
+<table>
+  <tr><th>键位</th><th>作用</th></tr>
+  <tr><td><span class="k">⌘ Tab</span></td><td>切换 App</td></tr>
+  <tr><td><span class="k">⌘ `</span></td><td>同一 App 的窗口循环</td></tr>
+  <tr><td><span class="k">⌘ Space</span></td><td>Spotlight（和 ⌥Space 一样）</td></tr>
+  <tr><td><span class="k">⌘ C</span> <span class="k">⌘ V</span> <span class="k">⌘ X</span> <span class="k">⌘ A</span> <span class="k">⌘ Z</span></td><td>复制 / 粘贴 / 剪切 / 全选 / 撤销</td></tr>
+  <tr><td><span class="k">⌘ W</span></td><td>关标签（不是关窗口）</td></tr>
+  <tr><td><span class="k">⌘ Q</span></td><td>退出 App</td></tr>
+  <tr><td><span class="k">⌘ ,</span></td><td>当前 App 设置</td></tr>
+  <tr><td><span class="k">⌘ Shift 3 / 4 / 5</span></td><td>截图 / 录屏</td></tr>
+  <tr><td><span class="k">⌃ ⌘ F</span> / 绿钮</td><td>系统原生全屏。鼠标移到顶端会滑出菜单栏和三个圆钮</td></tr>
+  <tr><td>Caps Lock</td><td>Caps Lock / 中文输入法，没有改成 Super</td></tr>
+</table>
+
+<h2>来源文件</h2>
+<table>
+  <tr><th>文件</th><th>内容</th></tr>
+  <tr><td><code>~/.config/aerospace/aerospace.toml</code></td><td>上面几乎全部键盘绑定</td></tr>
+  <tr><td><code>~/.config/omacosy/gesture.json</code></td><td>四指手势</td></tr>
+  <tr><td><code>~/.config/karabiner/karabiner.json</code></td><td>当前无复杂改键</td></tr>
+  <tr><td><code>~/.local/share/omacosy/config/apps.conf</code></td><td>终端 Ghostty、浏览器 Safari、音乐 Spotify、通讯 Slack</td></tr>
+</table>
+
+<footer>
+  Super = Option（⌥）。本文件根据当前生效配置生成，不是 README 旧说明。
+</footer>
+</body>
+</html>

@@ -19,6 +19,9 @@ compinit -C
 # everything personal lives here; keep this file distributable
 [ -f "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"
 
+# Live fzf / eza / bat / LS_COLORS from the active theme.
+[ -r "$HOME/.config/omarchy/current/theme/shell.env" ] && source "$HOME/.config/omarchy/current/theme/shell.env"
+
 # CLI stack (after .zshrc.local so frameworks there can't clobber these)
 eval "$(starship init zsh)"
 eval "$(zoxide init zsh)"

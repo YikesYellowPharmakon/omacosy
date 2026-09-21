@@ -15,6 +15,7 @@
 // CFMachPort pump at the bottom; registrations succeed silently and
 // deliver nothing without it.
 import AppKit
+import ApplicationServices
 
 // --- SkyLight externs ---------------------------------------------------
 
@@ -60,10 +61,79 @@ let EVENT_WINDOW_CREATE: UInt32 = 1325
 let EVENT_WINDOW_DESTROY: UInt32 = 1326
 let EVENT_FRONT_CHANGE: UInt32 = 1508
 
+@_silgen_name("_AXUIElementGetWindow")
+func _AXUIElementGetWindow(_ element: AXUIElement, _ widOut: UnsafeMutablePointer<UInt32>) -> Int32
+
+func eventWindowId(_ data: UnsafeMutableRawPointer?, _ len: Int) -> UInt32 {
+    guard let data, len >= MemoryLayout<UInt32>.size else { return 0 }
+    return data.load(as: UInt32.self)
+}
+
+func frontPid() -> pid_t? {
+    var psn = PSN()
+    var pid: pid_t = 0
+    guard SLPSGetFrontProcess(&psn) == 0, GetProcessPID(&psn, &pid) == 0 else { return nil }
+    return pid
+}
+
+func axBool(_ el: AXUIElement, _ attr: String) -> Bool? {
+    var ref: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, attr as CFString, &ref) == .success else { return nil }
+    return ref as? Bool
+}
+
+// Focused AX window of a pid: (wid, minimized). Nil if AX is unavailable.
+func axFocusedWindow(_ pid: pid_t) -> (UInt32, Bool)? {
+    let app = AXUIElementCreateApplication(pid)
+    var ref: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &ref) == .success,
+          let ref, CFGetTypeID(ref) == AXUIElementGetTypeID() else { return nil }
+    let win = ref as! AXUIElement
+    var wid: UInt32 = 0
+    guard _AXUIElementGetWindow(win, &wid) == 0, wid != 0 else { return nil }
+    return (wid, axBool(win, kAXMinimizedAttribute as String) ?? false)
+}
+
+func cgWindowBounds(_ wid: UInt32) -> (CGRect, Bool)? {
+    guard let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], wid) as? [[String: Any]],
+          let w = list.first,
+          (w["kCGWindowNumber"] as? Int).map(UInt32.init) == wid,
+          let b = w["kCGWindowBounds"] as? [String: Any],
+          let x = b["X"] as? CGFloat, let y = b["Y"] as? CGFloat,
+          let wd = b["Width"] as? CGFloat, let h = b["Height"] as? CGFloat
+    else { return nil }
+    let on = (w["kCGWindowIsOnscreen"] as? Bool) ?? false
+    return (CGRect(x: x, y: y, width: wd, height: h), on)
+}
+
+// Chrome native-fullscreen + hidden menu bar leaves a full-width toolbar
+// strip (~160pt) at y=0. Ringing that reads as a box stuck to the top
+// of the display while the real page sits elsewhere.
+func isToolbarStrip(_ r: CGRect) -> Bool {
+    if r.height < 80 { return true }
+    if r.width > r.height * 6, r.height < 240 { return true }
+    var ids = [CGDirectDisplayID](repeating: 0, count: 8)
+    var n: UInt32 = 0
+    guard CGGetActiveDisplayList(8, &ids, &n) == .success else { return false }
+    for i in 0..<Int(n) {
+        let d = CGDisplayBounds(ids[i])
+        guard d.intersects(r) else { continue }
+        let fullW = abs(r.width - d.width) < 40
+        let short = r.height < max(220, d.height * 0.26)
+        let atTop = (r.minY - d.minY) < 24
+        if fullW && short && atTop { return true }
+    }
+    return false
+}
+
+func usableWindowRect(_ r: CGRect) -> Bool {
+    r.width > 80 && r.height > 80 && !isToolbarStrip(r)
+}
+
 // styling from ~/.config/omacosy/borders.conf (width, radius, per-app
 // radius overrides)
 struct Conf {
-    var width: CGFloat = 4
+    var width: CGFloat = 2
     var radius: CGFloat = 10
     // ring offset from the window edge: 0 = inner edge flush with the
     // frame, positive = breathing room, negative = overlap (hides the
@@ -142,16 +212,26 @@ func focusedWindowFrame() -> (CGRect, String)? {
     let now = Date()
     let storm = now.timeIntervalSince(lastTickAt) < 0.1
     lastTickAt = now
+    if !storm || focusMayHaveChanged, let ax = axFocusedWindow(pid) {
+        if ax.1 {
+            lastWid = 0
+            return nil
+        }
+        if let (rect, on) = cgWindowBounds(ax.0), on, usableWindowRect(rect) {
+            lastWid = ax.0
+            lastFullScanAt = now
+            focusMayHaveChanged = false
+            return (rect, name)
+        }
+        if ax.0 != 0 {
+            // Focused window exists but is off-screen (miniaturize / space).
+            lastWid = 0
+            return nil
+        }
+    }
     if storm, !focusMayHaveChanged, lastWid != 0, now.timeIntervalSince(lastFullScanAt) < 0.25,
-        let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, lastWid) as? [[String: Any]],
-        let w = list.first,
-        (w["kCGWindowLayer"] as? Int) == 0,
-        (w["kCGWindowOwnerPID"] as? pid_t) == pid,
-        let b = w["kCGWindowBounds"] as? [String: Any],
-        let x = b["X"] as? CGFloat, let y = b["Y"] as? CGFloat,
-        let wd = b["Width"] as? CGFloat, let h = b["Height"] as? CGFloat,
-        wd > 60, h > 60 {
-        return (CGRect(x: x, y: y, width: wd, height: h), name)
+        let (rect, on) = cgWindowBounds(lastWid), on, usableWindowRect(rect) {
+        return (rect, name)
     }
     lastFullScanAt = now
     focusMayHaveChanged = false
@@ -163,9 +243,10 @@ func focusedWindowFrame() -> (CGRect, String)? {
             let b = w["kCGWindowBounds"] as? [String: Any],
             let x = b["X"] as? CGFloat, let y = b["Y"] as? CGFloat,
             let wd = b["Width"] as? CGFloat, let h = b["Height"] as? CGFloat,
-            wd > 60, h > 60
+            wd > 80, h > 80
         else { continue }
         let rect = CGRect(x: x, y: y, width: wd, height: h)
+        if isToolbarStrip(rect) { continue }
         // AeroSpace drags windows through offscreen stash positions
         // during workspace switches — ringing those mid-flight frames
         // is flicker. Only mostly-onscreen windows qualify.
@@ -238,6 +319,40 @@ func safeTop(for d: CGRect) -> CGFloat {
 // twice per tick, which adds up across a drag.
 var omniwmCached = false
 var omniwmCheckedAt = Date.distantPast
+var ssCheckedAt = Date.distantPast
+var ssCached = false
+func screensaverRunning() -> Bool {
+    if Date().timeIntervalSince(ssCheckedAt) < 0.25 { return ssCached }
+    ssCheckedAt = Date()
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/ps")
+    p.arguments = ["-axo", "command="]
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = FileHandle.nullDevice
+    guard (try? p.run()) != nil else {
+        ssCached = false
+        return false
+    }
+    let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    p.waitUntilExit()
+    ssCached = omacosyScreensaverProcessVisible(in: text)
+    return ssCached
+}
+
+func omacosyScreensaverProcessVisible(in text: String) -> Bool {
+    for raw in text.split(whereSeparator: \.isNewline) {
+        let line = String(raw)
+        if line.contains("omacosy-screensaver-idle") { continue }
+        if line.contains("omacosy-launch-screensaver") { continue }
+        if line.contains("ghostty-screensaver.conf") { return true }
+        if line.range(of: #"/omacosy-screensaver(?:\s|$)"#, options: .regularExpression) != nil {
+            return true
+        }
+    }
+    return false
+}
+
 func omniwmActive() -> Bool {
     if Date().timeIntervalSince(omniwmCheckedAt) < 0.5 { return omniwmCached }
     omniwmCheckedAt = Date()
@@ -453,29 +568,24 @@ func tick() {
     }
     noteStat(event: false)
     guard let hit = focusedWindowFrame() else {
-        // ring already hidden: there is nothing to hide and nothing
-        // to recheck — without this, an empty workspace ran the
-        // miss→recheck cycle at ~8 full window-list walks per second
-        // forever
-        if !win.isVisible {
-            missSince = nil
-            return
-        }
-        // transient misses happen around app switches and popups —
-        // hide only when the miss persists, or the ring blinks. Gates
-        // are wall-clock, not tick counts: event-driven ticks arrive
-        // in millisecond bursts and would rush a counter.
-        if missSince == nil { missSince = Date() }
-        if Date().timeIntervalSince(missSince!) >= 0.35 {
+        // Closed / unfocused windows must drop the ring immediately.
+        // The old 60ms hold left a ghost stroke after the window was gone.
+        if win.isVisible {
             hideRing("miss")
             syncShroud(nil)
         } else {
-            recheck(after: 0.15)
+            missSince = nil
         }
         return
     }
     let (f, appName) = hit
     missSince = nil
+
+    if appName.contains("ghostty"), screensaverRunning() {
+        hideRing("screensaver")
+        syncShroud(nil)
+        return
+    }
 
     // fullscreen is deliberate, not a transient: drop the ring at once
     // and cover the notch strip on displays that have one
@@ -499,11 +609,11 @@ func tick() {
     // THE felt "borders lag". Ghost frames are also rejected by the
     // ≥70%-onscreen filter above, so the stillness only has to outlast
     // one relayout frame, not the whole storm.
-    if Date().timeIntervalSince(lastWsSwitchAt) < 0.35 {
-        let stableFor = justHid ? 0.12 : 0.08
+    if Date().timeIntervalSince(lastWsSwitchAt) < 0.12 {
+        let stableFor = justHid ? 0.03 : 0.02
         let held = Date().timeIntervalSince(pendingSince)
         if held < stableFor {
-            recheck(after: stableFor - held + 0.01)
+            recheck(after: stableFor - held + 0.005)
             return
         }
     }
@@ -623,9 +733,39 @@ func rebuildSubscriptions() {
     }
 }
 
-let slsCallback: NotifyProc = { event, _, _, _ in
-    if event == EVENT_WINDOW_CREATE || event == EVENT_WINDOW_DESTROY {
+let slsCallback: NotifyProc = { event, data, len, _ in
+    let evWid = eventWindowId(data, len)
+    if event == EVENT_WINDOW_DESTROY {
         rebuildSubscriptions()
+        // Chrome / Cursor spawn and kill tooltips constantly. Hiding on
+        // every destroy made the ring flicker and look like it could
+        // not track. Only drop the ring when THIS window is the one
+        // we are drawing around.
+        if evWid != 0, evWid == lastWid {
+            lastWid = 0
+            focusMayHaveChanged = true
+            hideRing("destroy")
+            syncShroud(nil)
+            kickTick()
+        }
+        return
+    }
+    if event == EVENT_WINDOW_CREATE {
+        rebuildSubscriptions()
+    }
+    if event == EVENT_WINDOW_VISIBILITY {
+        focusMayHaveChanged = true
+        if evWid != 0, evWid == lastWid {
+            if let ax = frontPid().flatMap(axFocusedWindow), ax.1 {
+                lastWid = 0
+                hideRing("minimized")
+                syncShroud(nil)
+            } else if let hit = cgWindowBounds(evWid), !hit.1 || isToolbarStrip(hit.0) {
+                lastWid = 0
+                hideRing("hidden")
+                syncShroud(nil)
+            }
+        }
     }
     // anything but a move/resize can change which window is focused
     if event != EVENT_WINDOW_MOVE, event != EVENT_WINDOW_RESIZE {

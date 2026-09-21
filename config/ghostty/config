@@ -31,3 +31,6 @@ resize-overlay = never
 # forever — and back when every window was its own `open -na` instance,
 # that meant ten stale ghostty processes after a day's work.
 quit-after-last-window-closed = true
+
+# Live palette from the active omacosy/omarchy theme.
+config-file = ?/Users/ye/.config/omarchy/current/theme/ghostty.conf

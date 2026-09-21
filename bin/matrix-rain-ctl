@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Start or stop the Enter the Matrix live rain. Only this theme uses it.
+set -euo pipefail
+LABEL="com.omacosy.matrix-rain"
+PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+BIN="$HOME/.local/bin/omacosy-matrix-rain"
+STATE="$HOME/.local/state/omacosy"
+SAVER="$HOME/Library/Screen Savers/OmacosyRain.saver"
+UID_NUM="$(id -u)"
+
+write_agent() {
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${BIN}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>
+EOF
+}
+
+write_palette() {
+  mkdir -p "$STATE"
+  cat > "$STATE/matrix-rain.json" <<'JSON'
+{"background":"#080C08","accent":"#7BAE4E","head":"#E2FFE2"}
+JSON
+}
+
+start_rain() {
+  [[ -x "$BIN" ]] || return 0
+  write_palette
+  write_agent
+  launchctl bootout "gui/${UID_NUM}/${LABEL}" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/${UID_NUM}" "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1 || true
+  printf 'rain\n' > "$STATE/live"
+}
+
+stop_rain() {
+  launchctl bootout "gui/${UID_NUM}/${LABEL}" >/dev/null 2>&1 || true
+  launchctl unload "$PLIST" >/dev/null 2>&1 || true
+  killall omacosy-matrix-rain >/dev/null 2>&1 || true
+  rm -f "$STATE/live"
+}
+
+set_matrix_saver() {
+  [[ -d "$SAVER" ]] || return 0
+  defaults -currentHost write com.apple.screensaver moduleDict -dict \
+    moduleName OmacosyRain \
+    path "$SAVER" \
+    type -int 0 >/dev/null 2>&1 || true
+  defaults -currentHost write com.apple.screensaver idleTime -int 180 >/dev/null 2>&1 || true
+  /usr/bin/osascript >/dev/null 2>&1 -e 'tell application "System Events" to set current screen saver to screen saver "OmacosyRain"' || true
+}
+
+cmd="${1:-status}"
+case "$cmd" in
+  start)
+    start_rain
+    set_matrix_saver
+    echo "matrix rain on"
+    ;;
+  stop)
+    stop_rain
+    echo "matrix rain off"
+    ;;
+  apply)
+    name="${2:-}"
+    wall="${3:-}"
+    if [ "$name" = "enter-the-matrix" ]; then
+      if [ "$wall" = "__rain__" ] || [ "$wall" = "rain" ] || [ -z "$wall" ] || [[ "$(basename -- "$wall")" == void.png ]] || [[ "$(basename -- "$wall")" == lock.png ]]; then
+        start_rain
+      else
+        stop_rain
+      fi
+      set_matrix_saver
+    else
+      stop_rain
+    fi
+    ;;
+  status)
+    if pgrep -x omacosy-matrix-rain >/dev/null 2>&1; then
+      echo "running"
+    else
+      echo "stopped"
+    fi
+    ;;
+  *)
+    echo "matrix-rain-ctl start|stop|apply <theme> [wallpaper]|status" >&2
+    exit 2
+    ;;
+esac

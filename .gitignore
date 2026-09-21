@@ -4,3 +4,11 @@
 /omacosy-gesture.app/
 config/apps.local.conf
 config/aerospace/aerospace.toml
+**/__pycache__/
+*.pyc
+signing/
+*.p12
+helper/oligarchy-screensaver/bin/omacosy-ss-guard
+helper/oligarchy-screensaver/bin/omacosy-session-locked
+helper/vapor-sys-saver/test_render
+helper/vapor-sys-saver/host_saver

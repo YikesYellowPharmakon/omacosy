@@ -16,5 +16,9 @@
   <string>omacosy-bar shows how many bluetooth devices are connected in the status bar.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
   <string>macOS treats the name of the wi-fi network you are on as location data. omacosy-bar shows that name in the status bar; it never reads your position.</string>
+  <key>NSAccessibilityUsageDescription</key>
+  <string>omacosy-bar shows the front app's File / Edit menus in the bar. It does not control the computer beyond those menu clicks.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>omacosy-bar opens Notification Center by clicking the system Clock extra.</string>
 </dict>
 </plist>

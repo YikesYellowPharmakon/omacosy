@@ -1,0 +1,71 @@
+#!/bin/bash
+# Open Ghostty and let AeroSpace fullscreen it. No -e (that is the Allow
+# sheet). Return immediately so the Apple menu does not hitch.
+
+set -euo pipefail
+
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _dir=$(cd -- "$(dirname -- "$_src")" && pwd)
+  _src=$(readlink "$_src")
+  case "$_src" in
+    /*) ;;
+    *) _src="$_dir/$_src" ;;
+  esac
+done
+here=$(cd -- "$(dirname -- "$_src")" && pwd)
+ROOT=$(cd -- "$here/.." && pwd)
+GHOSTTY="${GHOSTTY_APP:-/Applications/Ghostty.app}"
+CONF="$ROOT/ghostty-screensaver.conf"
+RUN="$here/omacosy-screensaver"
+
+if pgrep -f '/bin/omacosy-screensaver$' >/dev/null 2>&1; then
+  exit 0
+fi
+
+if [ ! -d "$GHOSTTY" ]; then
+  echo "Ghostty.app not found at $GHOSTTY" >&2
+  exit 1
+fi
+
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omacosy"
+mkdir -p "$STATE"
+date +%s >"$STATE/ss-launched"
+
+("$here/oligarchy-screensaver-text" >/dev/null 2>&1) &
+
+RUNTIME="$STATE/ghostty-screensaver.conf"
+{
+  cat "$CONF"
+  printf '\ncommand = %s\ninitial-command = %s\n' "$RUN" "$RUN"
+} >"$RUNTIME"
+
+open -na "$GHOSTTY" --args \
+  --config-default-files=false \
+  --config-file="$RUNTIME" \
+  --title=omacosy-screensaver \
+  --fullscreen=false
+
+# Apply official overlay fullscreen after the window exists. Do not
+# block the menu click on this loop.
+(
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+  for _ in $(seq 1 25); do
+    wid=$(aerospace list-windows --all 2>/dev/null | awk -F'|' '/omacosy-screensaver/ {gsub(/ /,"",$1); print $1; exit}')
+    if [ -n "${wid:-}" ]; then
+      aerospace layout floating --window-id "$wid" >/dev/null 2>&1 || true
+      aerospace fullscreen on --window-id "$wid" --no-outer-gaps >/dev/null 2>&1 || true
+      break
+    fi
+    sleep 0.08
+  done
+) >/dev/null 2>&1 &
+
+GUARD="$here/omacosy-ss-guard"
+if [ ! -x "$GUARD" ]; then
+  GUARD="$HOME/.local/bin/omacosy-ss-guard"
+fi
+if [ -x "$GUARD" ]; then
+  pkill -x omacosy-ss-guard >/dev/null 2>&1 || true
+  ( exec "$GUARD" ) >/dev/null 2>&1 &
+fi

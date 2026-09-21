@@ -1,0 +1,594 @@
+#!/usr/bin/env python3
+"""Rebuild omacosy themes: official real wallpapers + themes.md community packs only."""
+
+from __future__ import annotations
+
+import json
+import random
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import zlib
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+THEMES = REPO / "themes"
+PACK = REPO / "bin" / "theme-pack.py"
+CACHE = Path.home() / ".local" / "cache" / "omacosy"
+OFFICIAL = "https://github.com/omacom/omarchy.git"
+CATALOG = "https://raw.githubusercontent.com/limehawk/omarchy-theme-website/main/src/data/themes-data.json"
+THEMES_MD = Path("/Users/ye/Desktop/themes.md")
+EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
+FAKE = re.compile(
+    r"(preview|unlock|screenshot|screenie|^theme\.png$|palette|omarchy-icon|readme|waybar|neofetch)",
+    re.I,
+)
+PAIR = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"?(#?[0-9A-Fa-f]{6})"?')
+GHOSTTY_BG = re.compile(r"^\s*background\s*=\s*#?([0-9A-Fa-f]{6})", re.I)
+GHOSTTY_FG = re.compile(r"^\s*foreground\s*=\s*#?([0-9A-Fa-f]{6})", re.I)
+GHOSTTY_PAL = re.compile(r"^\s*palette\s*=\s*(\d+)\s*=\s*#?([0-9A-Fa-f]{6})", re.I)
+HEX = re.compile(r"#([0-9A-Fa-f]{6})")
+SLUG_RE = re.compile(r"omarchytheme\.com/themes/([A-Za-z0-9._-]+)")
+GITHUB_RE = re.compile(r"github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)")
+
+COMMUNITY_MAP = {
+    "monokai-dark": ("ericrswanny", "omarchy-monokai-dark-theme"),
+    "azure": ("tahfizhabib", "omarchy-azure-theme"),
+    "snow-black": ("ankur311sudo", "snow_black"),
+    "enter-the-matrix": ("tymurbogach", "omarchy-enter-the-matrix-theme"),
+}
+
+REPO_SLUG = {
+    "omarchy-enter-the-matrix-theme": "enter-the-matrix",
+}
+
+EXTRA_WALLPAPERS: dict[str, list[str]] = {}
+
+
+def run(cmd, cwd=None) -> bool:
+    try:
+        subprocess.run(cmd, cwd=cwd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
+def curl(url: str, dest: Path | None = None, timeout: int = 90) -> bytes | None:
+    cmd = ["curl", "-fsSL", "--max-time", str(timeout), "-A", "omacosy-theme-sync", "-L", url]
+    try:
+        if dest:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(cmd + ["-o", str(dest)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return dest.read_bytes() if dest.is_file() else None
+        proc = subprocess.run(cmd, check=True, capture_output=True)
+        return proc.stdout
+    except Exception:
+        return None
+
+
+LOGO_NAMES = {"omarchy.webp", "omarchy.png", "omarchy.jpg", "omarchy.jpeg"}
+
+
+def is_lock_art(path: Path) -> bool:
+    if not path.is_file() or path.suffix.lower() not in EXTS:
+        return False
+    name = path.name.lower()
+    if name in LOGO_NAMES or "preview" in name:
+        return False
+    size = path.stat().st_size
+    if name.startswith("unlock") and size > 80_000:
+        return True
+    if "omarchy" in name and size > 30_000:
+        return True
+    if name.startswith(("lock.", "lock-", "lock_")) and size > 30_000:
+        return True
+    return False
+
+
+def is_real_wallpaper(path: Path) -> bool:
+    if not path.is_file() or path.suffix.lower() not in EXTS:
+        return False
+    name = path.name.lower()
+    if FAKE.search(name):
+        return False
+    if name in LOGO_NAMES:
+        return False
+    if name.startswith("remote-"):
+        return False
+    if name.endswith(("-omarchy.png", "-omarchy.webp", "-omarchy.jpg")):
+        return False
+    if is_lock_art(path):
+        return False
+    if "omarchy" in name and path.stat().st_size < 80_000:
+        return False
+    return True
+
+
+def parse_toml_colors(text: str) -> dict[str, str]:
+    colors: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = PAIR.match(stripped)
+        if match:
+            val = match.group(2)
+            colors[match.group(1)] = val if val.startswith("#") else f"#{val}"
+    return colors
+
+
+def parse_ghostty_colors(text: str) -> dict[str, str]:
+    colors: dict[str, str] = {}
+    for line in text.splitlines():
+        if (m := GHOSTTY_BG.match(line)):
+            colors["background"] = f"#{m.group(1)}"
+        elif (m := GHOSTTY_FG.match(line)):
+            colors["foreground"] = f"#{m.group(1)}"
+        elif (m := GHOSTTY_PAL.match(line)):
+            colors[f"color{m.group(1)}"] = f"#{m.group(2)}"
+    if "color4" in colors:
+        colors.setdefault("accent", colors["color4"])
+    if "color8" in colors:
+        colors.setdefault("muted", colors["color8"])
+    return colors
+
+
+def parse_alacritty_colors(text: str) -> dict[str, str]:
+    colors: dict[str, str] = {}
+    section = ""
+    key_map = {
+        "black": 0,
+        "red": 1,
+        "green": 2,
+        "yellow": 3,
+        "blue": 4,
+        "magenta": 5,
+        "cyan": 6,
+        "white": 7,
+    }
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line.strip("[]").lower()
+            continue
+        m = re.match(r"([A-Za-z_]+)\s*=\s*['\"]?(#?[0-9A-Fa-f]{6})['\"]?", line)
+        if not m:
+            continue
+        key, val = m.group(1).lower(), m.group(2)
+        val = val if val.startswith("#") else f"#{val}"
+        if "selection" in section:
+            if key == "background":
+                colors["selection_background"] = val
+            elif key in {"text", "foreground"}:
+                colors["selection_foreground"] = val
+            continue
+        if any(part in section for part in ("search", "hint", "footer", "vi_mode")):
+            continue
+        if key == "cursor" and "cursor" in section:
+            colors["cursor"] = val
+            continue
+        if key in {"background", "foreground"} and "primary" in section:
+            if "bright" in section and key == "foreground":
+                colors["bright_foreground"] = val
+            else:
+                colors[key] = val
+            continue
+        if key in key_map:
+            idx = key_map[key]
+            if "bright" in section:
+                colors[f"color{idx + 8}"] = val
+            elif "normal" in section or section.endswith(".normal"):
+                colors[f"color{idx}"] = val
+                named = {1: "red", 2: "green", 3: "yellow", 4: "blue", 5: "magenta", 6: "cyan"}
+                if idx in named:
+                    colors.setdefault(named[idx], val)
+    if "color4" in colors:
+        colors.setdefault("accent", colors["color4"])
+    return colors
+
+
+def extract_colors(src: Path) -> dict[str, str]:
+    for name in ("colors.toml", "ghostty.conf", "ghostty-theme", "alacritty.toml"):
+        path = src / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if name == "colors.toml":
+            parsed = parse_toml_colors(text)
+        elif name.startswith("ghostty"):
+            parsed = parse_ghostty_colors(text)
+        else:
+            parsed = parse_alacritty_colors(text)
+        if "background" in parsed:
+            return parsed
+    return {}
+
+
+def write_colors_toml(dest: Path, colors: dict[str, str]) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    order = [
+        "mode",
+        "accent",
+        "cursor",
+        "foreground",
+        "background",
+        "selection_foreground",
+        "selection_background",
+        "muted",
+        "darker_background",
+        "lighter_background",
+        "bright_foreground",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+    ]
+    lines = []
+    seen = set()
+    for key in order:
+        if key in colors and key not in seen:
+            val = colors[key]
+            if key == "mode":
+                lines.append(f'{key} = "{val}"')
+            else:
+                if not str(val).startswith("#"):
+                    val = f"#{val}"
+                lines.append(f'{key} = "{val}"')
+            seen.add(key)
+    for i in range(16):
+        key = f"color{i}"
+        if key in colors and key not in seen:
+            val = colors[key]
+            if not str(val).startswith("#"):
+                val = f"#{val}"
+            lines.append(f'{key} = "{val}"')
+            seen.add(key)
+    dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def hex_to_rgb(value: str) -> tuple[int, int, int]:
+    value = value.strip().lstrip("#")
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def clamp(n: int) -> int:
+    return 0 if n < 0 else 255 if n > 255 else n
+
+
+def mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+    return tuple(int(a[i] * (1 - t) + b[i] * t) for i in range(3))  # type: ignore[return-value]
+
+
+def write_png(path: Path, width: int, height: int, rgb: bytes) -> None:
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    raw = b"".join(b"\x00" + rgb[y * width * 3 : (y + 1) * width * 3] for y in range(height))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+def generate_grain(colors: dict[str, str], dest: Path, width: int = 2560, height: int = 1600) -> None:
+    bg = hex_to_rgb(colors.get("background", "#111111"))
+    accent = hex_to_rgb(colors.get("accent", colors.get("color4", colors.get("foreground", "#888888"))))
+    lift = hex_to_rgb(colors.get("lighter_background", colors.get("color8", colors.get("background", "#222222"))))
+    rng = random.Random(sum(bg) * 97 + sum(accent) * 13)
+    pixels = bytearray(width * height * 3)
+    for y in range(height):
+        vy = y / (height - 1)
+        for x in range(width):
+            vx = x / (width - 1)
+            vignette = (vx - 0.5) ** 2 + (vy - 0.5) ** 2
+            color = mix(bg, lift, 0.35 * (1 - vy) + 0.12 * vx)
+            color = mix(color, accent, 0.04 + 0.10 * (1 - min(1.0, vignette * 2.4)))
+            grain = rng.randint(-10, 10)
+            idx = (y * width + x) * 3
+            pixels[idx] = clamp(color[0] + grain)
+            pixels[idx + 1] = clamp(color[1] + grain)
+            pixels[idx + 2] = clamp(color[2] + grain)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    write_png(dest, width, height, bytes(pixels))
+
+
+def generate_sidecars(theme_dir: Path) -> None:
+    subprocess.run([sys.executable, str(PACK), "apply-sidecars", str(theme_dir)], check=False)
+
+
+THEME_PINS = {
+    "snow-black": {"desktop": {"9.png"}, "lock": "4.png"},
+    "azure": {"desktop": {"1.png"}, "lock": "1.png"},
+    "monokai-dark": {"desktop": {"01. Monokai.png"}, "lock": "01. Monokai.png"},
+    "enter-the-matrix": {
+        "desktop": {"06-office-crt.jpg"},
+        "lock": "06-office-crt.jpg",
+    },
+}
+
+
+def copy_real_backgrounds(src: Path, dest: Path) -> int:
+    out = dest / "backgrounds"
+    out.mkdir(parents=True, exist_ok=True)
+    keep = THEME_PINS.get(dest.name, {}).get("desktop")
+    lock_name = THEME_PINS.get(dest.name, {}).get("lock")
+    n = 0
+    roots = []
+    for name in ("backgrounds", "wallpaper", "wallpapers"):
+        folder = src / name
+        if folder.is_dir():
+            roots.append(folder)
+    if not roots:
+        return 0
+    for folder in roots:
+        for path in sorted(folder.iterdir()):
+            if keep is not None:
+                names = keep if isinstance(keep, (set, list, tuple)) else {keep}
+                if path.name not in names:
+                    continue
+            elif not is_real_wallpaper(path):
+                continue
+            if lock_name and path.name == lock_name:
+                continue
+            target = out / path.name
+            shutil.copy2(path, target)
+            n += 1
+    return n
+
+
+def copy_lock(src: Path, dest: Path) -> None:
+    pin = THEME_PINS.get(dest.name, {}).get("lock")
+    if pin:
+        for folder_name in ("backgrounds", "wallpaper", "wallpapers"):
+            pinned = src / folder_name / pin
+            if pinned.is_file():
+                dest_lock = dest / "lock.png"
+                if pinned.suffix.lower() == ".png":
+                    shutil.copy2(pinned, dest_lock)
+                else:
+                    subprocess.run(
+                        ["sips", "-s", "format", "png", str(pinned), "--out", str(dest_lock)],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                return
+    unlock = src / "unlock.png"
+    if unlock.is_file() and "preview" not in unlock.name.lower():
+        shutil.copy2(unlock, dest / "unlock-source.png")
+    candidates: list[Path] = []
+    for folder_name in ("backgrounds", "wallpaper", "wallpapers"):
+        folder = src / folder_name
+        if not folder.is_dir():
+            continue
+        for path in folder.iterdir():
+            if is_lock_art(path):
+                candidates.append(path)
+    if unlock.is_file() and "preview" not in unlock.name.lower() and unlock.stat().st_size > 80_000:
+        candidates.append(unlock)
+    if not candidates:
+        return
+    branded = [p for p in candidates if "omarchy" in p.name.lower() and p.name.lower() not in LOGO_NAMES]
+    chosen = max(branded or candidates, key=lambda p: p.stat().st_size)
+    dest_lock = dest / "lock.png"
+    if chosen.suffix.lower() == ".png":
+        shutil.copy2(chosen, dest_lock)
+        return
+    dest_lock.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["sips", "-s", "format", "png", str(chosen), "--out", str(dest_lock)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not dest_lock.is_file():
+        shutil.copy2(chosen, dest / f"lock{chosen.suffix.lower()}")
+
+
+def wipe_themes() -> None:
+    THEMES.mkdir(parents=True, exist_ok=True)
+    for child in THEMES.iterdir():
+        if child.is_dir() or child.is_symlink():
+            if child.is_symlink() or not child.is_dir():
+                child.unlink()
+            else:
+                shutil.rmtree(child)
+
+
+def ensure_official() -> Path:
+    src = CACHE / "omarchy-official"
+    CACHE.mkdir(parents=True, exist_ok=True)
+    if (src / "themes").is_dir() and any((src / "themes").iterdir()):
+        return src
+    if src.exists():
+        shutil.rmtree(src)
+    ok = run(["git", "clone", "--depth", "1", "--branch", "quattro", "--filter=blob:none", "--sparse", OFFICIAL, str(src)])
+    if ok:
+        run(["git", "-C", str(src), "sparse-checkout", "set", "themes"])
+    return src
+
+
+OFFICIAL_KEEP = set()
+
+
+def sync_official() -> int:
+    print("==> official omarchy themes (classics only)")
+    src = ensure_official()
+    root = src / "themes"
+    if not root.is_dir():
+        print("official themes/ missing", file=sys.stderr)
+        return 0
+    count = 0
+    for theme in sorted(p for p in root.iterdir() if p.is_dir()):
+        if theme.name not in OFFICIAL_KEEP:
+            continue
+        dest = THEMES / theme.name
+        dest.mkdir(parents=True, exist_ok=True)
+        if (theme / "colors.toml").is_file():
+            shutil.copy2(theme / "colors.toml", dest / "colors.toml")
+        for extra in ("icons.theme", "vscode.json"):
+            if (theme / extra).is_file():
+                shutil.copy2(theme / extra, dest / extra)
+        n = copy_real_backgrounds(theme, dest)
+        copy_lock(theme, dest)
+        if not (dest / "colors.toml").is_file():
+            print(f"  skip {theme.name} (no colors)")
+            shutil.rmtree(dest)
+            continue
+        if n == 0:
+            colors = parse_toml_colors((dest / "colors.toml").read_text())
+            generate_grain(colors, dest / "backgrounds" / "generated.png")
+            n = 1
+            print(f"  official {theme.name} (generated wallpaper)")
+        else:
+            print(f"  official {theme.name} ({n} wallpapers)")
+        generate_sidecars(dest)
+        count += 1
+    return count
+
+
+def ensure_repo(owner: str, repo: str) -> Path | None:
+    dest = CACHE / "community" / f"{owner}-{repo}"
+    url = f"https://github.com/{owner}/{repo}.git"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if (dest / ".git").is_dir():
+        run(["git", "-C", str(dest), "sparse-checkout", "disable"])
+        run(["git", "-C", str(dest), "fetch", "--depth", "1"])
+        run(["git", "-C", str(dest), "checkout", "-f", "FETCH_HEAD"])
+        run(["git", "-C", str(dest), "reset", "--hard", "HEAD"])
+        run(["git", "-C", str(dest), "checkout", "HEAD", "--", "."])
+        return dest
+    if dest.exists():
+        shutil.rmtree(dest)
+    if run(["git", "clone", "--depth", "1", url, str(dest)]):
+        return dest
+    return None
+
+
+def download_extras(slug: str, dest: Path) -> int:
+    urls = EXTRA_WALLPAPERS.get(slug, [])
+    n = 0
+    out = dest / "backgrounds"
+    out.mkdir(parents=True, exist_ok=True)
+    for i, url in enumerate(urls, 1):
+        tmp = out / f"remote-{i}.bin"
+        data = curl(url, tmp)
+        if not data or len(data) < 20_000:
+            if tmp.exists():
+                tmp.unlink()
+            continue
+        ext = ".jpg"
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            ext = ".png"
+        elif data[:4] == b"RIFF":
+            ext = ".webp"
+        final = out / f"remote-{i}{ext}"
+        tmp.rename(final)
+        if not is_real_wallpaper(final):
+            final.unlink()
+            continue
+        n += 1
+    return n
+
+
+def catalog_lookup() -> dict[str, tuple[str, str]]:
+    extra = {}
+    raw = curl(CATALOG)
+    if not raw:
+        return extra
+    try:
+        items = json.loads(raw.decode())
+    except Exception:
+        return extra
+    for item in items:
+        slug = item.get("slug") or ""
+        owner, repo = item.get("github_owner"), item.get("github_repo")
+        if slug and owner and repo:
+            extra[slug] = (owner, repo)
+    return extra
+
+
+def slug_from_repo(repo: str) -> str:
+    name = repo.rstrip("/").removesuffix(".git")
+    if name in REPO_SLUG:
+        return REPO_SLUG[name]
+    slug = name
+    if slug.startswith("omarchy-"):
+        slug = slug[len("omarchy-") :]
+    if slug.endswith("-theme"):
+        slug = slug[: -len("-theme")]
+    return slug
+
+
+def parse_themes_md() -> list[str]:
+    if not THEMES_MD.is_file():
+        return list(COMMUNITY_MAP)
+    slugs = []
+    for line in THEMES_MD.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = SLUG_RE.search(line)
+        if m:
+            slugs.append(m.group(1).strip("/"))
+            continue
+        g = GITHUB_RE.search(line)
+        if g:
+            owner, repo = g.group(1), g.group(2)
+            slug = slug_from_repo(repo)
+            slugs.append(slug)
+            COMMUNITY_MAP.setdefault(slug, (owner, repo.removesuffix(".git")))
+    return slugs or list(COMMUNITY_MAP)
+
+
+def sync_community() -> int:
+    print("==> community themes from themes.md")
+    slugs = parse_themes_md()
+    catalog = catalog_lookup()
+    count = 0
+    for slug in slugs:
+        owner_repo = COMMUNITY_MAP.get(slug) or catalog.get(slug)
+        if not owner_repo:
+            print(f"  skip {slug} (no github mapping)")
+            continue
+        owner, repo = owner_repo
+        print(f"  fetch {slug} <- {owner}/{repo}")
+        src = ensure_repo(owner, repo)
+        if src is None:
+            print(f"  skip {slug} (clone failed)")
+            continue
+        dest = THEMES / slug
+        if dest.exists():
+            shutil.rmtree(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        colors = extract_colors(src)
+        if not colors:
+            print(f"  skip {slug} (no parseable colors)")
+            shutil.rmtree(dest)
+            continue
+        write_colors_toml(dest / "colors.toml", colors)
+        n = copy_real_backgrounds(src, dest)
+        n += download_extras(slug, dest)
+        if n == 0:
+            generate_grain(colors, dest / "backgrounds" / "generated.png")
+            n = 1
+            print(f"  community {slug} (generated matching wallpaper)")
+        else:
+            print(f"  community {slug} ({n} real wallpapers)")
+        generate_sidecars(dest)
+        (dest / "SOURCE").write_text(f"https://github.com/{owner}/{repo}\nhttps://omarchytheme.com/themes/{slug}/\n", encoding="utf-8")
+        count += 1
+    return count
+
+
+def main() -> int:
+    print("==> wiping previous themes")
+    wipe_themes()
+    official_n = sync_official()
+    community_n = sync_community()
+    print("==> done")
+    print(f"  official={official_n} community={community_n}")
+    for path in sorted(THEMES.iterdir()):
+        if not path.is_dir():
+            continue
+        walls = list((path / "backgrounds").glob("*")) if (path / "backgrounds").is_dir() else []
+        print(f"  {path.name}: {len(walls)} wallpaper(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
