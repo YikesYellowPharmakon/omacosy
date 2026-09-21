@@ -117,6 +117,11 @@ start_caffeine() {
   echo $! >"$CAFF_PIDFILE"
 }
 
+restore_dock_after_saver() {
+  local dock="$HOME/.local/share/omacosy/helper/oligarchy-screensaver/bin/omacosy-ss-dock"
+  [ -x "$dock" ] && "$dock" restore || true
+}
+
 stop_screensaver() {
   stop_caffeine
   pkill -x omacosy-ss-guard >/dev/null 2>&1 || true
@@ -124,6 +129,7 @@ stop_screensaver() {
   pkill -f '/bin/omacosy-screensaver$' >/dev/null 2>&1 || true
   pkill -x tte >/dev/null 2>&1 || true
   pkill -x ttfx >/dev/null 2>&1 || true
+  restore_dock_after_saver
 }
 
 lock_after_saver() {

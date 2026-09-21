@@ -558,7 +558,7 @@ win.backgroundColor = NSColor.black.withAlphaComponent(0.72)
 win.hasShadow = false
 win.animationBehavior = .none
 win.acceptsMouseMovedEvents = true
-win.collectionBehavior = [.canJoinAllSpaces, .stationary]
+win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
 func revealCards(_ content: ContentView) {
     content.cards.wantsLayer = true
@@ -622,6 +622,7 @@ func hideOverlay(animated: Bool = true) {
 func switchTo(_ ws: String) {
     tlog("switchTo \(ws)")
     previousFront = nil // the WM assigns focus; nothing to restore
+    ignoreShowUntil = Date().addingTimeInterval(1.6)
     hideOverlay(animated: false) // switching should snap
     DispatchQueue.global().async {
         if omniwmActive() {
@@ -630,6 +631,7 @@ func switchTo(_ ws: String) {
             let out = omniwmctl(["workspace", "focus-name", ws])
             tlog("omniwmctl workspace focus-name \(ws) -> '\(out.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))'")
         } else {
+            exitNativeFullscreen()
             let out = aerospace(["workspace", ws])
             tlog("aerospace workspace \(ws) -> '\(out.trimmingCharacters(in: .whitespacesAndNewlines))'")
         }
@@ -644,6 +646,7 @@ func switchTo(_ ws: String) {
 func focusWindow(_ w: Win, in ws: String) {
     tlog("focusWindow \(w.app) on \(ws)")
     previousFront = nil
+    ignoreShowUntil = Date().addingTimeInterval(1.6)
     hideOverlay(animated: false)
     DispatchQueue.global().async {
         if omniwmActive() {
@@ -651,9 +654,27 @@ func focusWindow(_ w: Win, in ws: String) {
         } else {
             // workspace first: the switch must land even if focusing a
             // just-unhidden window is refused mid-settle
+            exitNativeFullscreen()
             _ = aerospace(["workspace", ws])
             _ = aerospace(["focus", "--window-id", w.wmId])
         }
+    }
+}
+
+// Native fullscreen is its own Space. `aerospace workspace N` reports
+// success but the user stays on that Space, and the opening swipe's
+// tail then SIGUSR1-toggles the overview back open — looks like
+// digits/clicks do nothing. Leave native FS before the switch.
+func exitNativeFullscreen() {
+    let listed = aerospace(["list-windows", "--all", "--format",
+        "%{window-id}|%{window-layout}"])
+    for line in listed.split(separator: "\n") {
+        let f = line.split(separator: "|").map(String.init)
+        guard f.count >= 2, f[1] == "macos_native_fullscreen" else { continue }
+        tlog("exit native fullscreen wid=\(f[0])")
+        _ = aerospace(["macos-native-fullscreen", "off", "--window-id", f[0],
+            "--fail-if-noop"])
+        _ = aerospace(["layout", "tiling", "--window-id", f[0]])
     }
 }
 
@@ -1301,6 +1322,7 @@ func showOverlay() {
 }
 
 var lastShowAt = Date.distantPast
+var ignoreShowUntil = Date.distantPast
 let usr1 = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
 usr1.setEventHandler {
     tlog("SIGUSR1 visible=\(overlayVisible)")
@@ -1309,6 +1331,8 @@ usr1.setEventHandler {
         // vertical gesture — a close-toggle within 1.2s of showing is
         // not a human asking to close
         if Date().timeIntervalSince(lastShowAt) > 1.2 { hideOverlay() }
+    } else if Date() < ignoreShowUntil {
+        tlog("  skip show — just switched workspace")
     } else {
         lastShowAt = Date()
         showOverlay()

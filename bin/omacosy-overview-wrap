@@ -1,0 +1,31 @@
+#!/bin/bash
+# Old overview.bin has no ignore window. Digit/click hides the overlay,
+# then the opening swipe's lift-off runs this again and SIGUSR1-shows
+# it — looks like the number did nothing. Drop those reopens.
+set -euo pipefail
+BIN="${OMACOSY_OVERVIEW_BIN:-$HOME/.local/bin/omacosy-overview.bin}"
+U=$(id -u)
+STAMP=/tmp/omacosy-ws-switch
+SHOWN=/tmp/omacosy-overview-shown
+ACTIVE="/tmp/omacosy-overlay-active-$U"
+
+fresh() {
+  local f="$1" sec="$2"
+  [ -f "$f" ] || return 1
+  local now then
+  now=$(date +%s)
+  then=$(stat -f %m "$f" 2>/dev/null || echo 0)
+  (( now - then < sec ))
+}
+
+if [[ "${1:-}" != "close" && "${1:-}" != "--daemon" ]]; then
+  if fresh "$STAMP" 4; then
+    exit 0
+  fi
+  # overlay just hid (digit/click) after a recent show: lift-off noise
+  if [ ! -f "$ACTIVE" ] && fresh "$SHOWN" 4; then
+    exit 0
+  fi
+  date +%s >"$SHOWN"
+fi
+exec "$BIN" "$@"

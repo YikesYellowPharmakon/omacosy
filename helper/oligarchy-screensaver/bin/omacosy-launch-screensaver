@@ -19,9 +19,15 @@ GHOSTTY="${GHOSTTY_APP:-/Applications/Ghostty.app}"
 CONF="$ROOT/ghostty-screensaver.conf"
 RUN="$here/omacosy-screensaver"
 
+DOCK="$here/omacosy-ss-dock"
+
 if pgrep -f '/bin/omacosy-screensaver$' >/dev/null 2>&1; then
   exit 0
 fi
+
+# Autohide Dock stays revealed while the pointer sits on it. Park the
+# cursor in the display centre before Ghostty opens.
+[ -x "$DOCK" ] && "$DOCK" hide || true
 
 if [ ! -d "$GHOSTTY" ]; then
   echo "Ghostty.app not found at $GHOSTTY" >&2
@@ -47,9 +53,11 @@ open -na "$GHOSTTY" --args \
   --fullscreen=false
 
 # Apply official overlay fullscreen after the window exists. Do not
-# block the menu click on this loop.
+# block the menu click on this loop. Warp again after fullscreen so
+# the Dock can slide away, then start the pointer catcher.
 (
   export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+  [ -x "$DOCK" ] && "$DOCK" warp || true
   for _ in $(seq 1 25); do
     wid=$(aerospace list-windows --all 2>/dev/null | awk -F'|' '/omacosy-screensaver/ {gsub(/ /,"",$1); print $1; exit}')
     if [ -n "${wid:-}" ]; then
@@ -59,13 +67,14 @@ open -na "$GHOSTTY" --args \
     fi
     sleep 0.08
   done
+  [ -x "$DOCK" ] && "$DOCK" warp || true
+  GUARD="$here/omacosy-ss-guard"
+  if [ ! -x "$GUARD" ]; then
+    GUARD="$HOME/.local/bin/omacosy-ss-guard"
+  fi
+  if [ -x "$GUARD" ]; then
+    pkill -x omacosy-ss-guard >/dev/null 2>&1 || true
+    "$GUARD" >/dev/null 2>&1 || true
+  fi
+  [ -x "$DOCK" ] && "$DOCK" restore || true
 ) >/dev/null 2>&1 &
-
-GUARD="$here/omacosy-ss-guard"
-if [ ! -x "$GUARD" ]; then
-  GUARD="$HOME/.local/bin/omacosy-ss-guard"
-fi
-if [ -x "$GUARD" ]; then
-  pkill -x omacosy-ss-guard >/dev/null 2>&1 || true
-  ( exec "$GUARD" ) >/dev/null 2>&1 &
-fi

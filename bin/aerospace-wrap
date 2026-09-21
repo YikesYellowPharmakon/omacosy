@@ -1,0 +1,40 @@
+#!/bin/bash
+# Called by omacosy-overview (hardcoded /opt/homebrew/bin/aerospace).
+# Native fullscreen is its own Space: `workspace N` reports success but
+# the user stays there. Leave native FS so the switch is visible, and
+# remember the window so omacosy-ws-land can put it back on return.
+set -euo pipefail
+REAL="${AEROSPACE_REAL:-/opt/homebrew/Caskroom/aerospace/0.21.3-Beta/AeroSpace-v0.21.3-Beta/bin/aerospace}"
+if [[ ! -x "$REAL" ]]; then
+  REAL=/opt/homebrew/Caskroom/aerospace/0.21.3-Beta/AeroSpace-v0.21.3-Beta/bin/aerospace
+fi
+
+HOLD="${XDG_STATE_HOME:-$HOME/.local/state}/omacosy/fs-hold"
+mkdir -p "$(dirname "$HOLD")"
+touch "$HOLD"
+
+hold_put() {
+  local ws="$1" id="$2"
+  local tmp
+  tmp=$(mktemp)
+  awk -v ws="$ws" '$1 != ws' "$HOLD" >"$tmp" 2>/dev/null || true
+  printf '%s %s\n' "$ws" "$id" >>"$tmp"
+  mv "$tmp" "$HOLD"
+}
+
+if [[ "${1:-}" == "workspace" ]]; then
+  date +%s > /tmp/omacosy-ws-switch
+  exited=0
+  while IFS='|' read -r id layout ws; do
+    [[ "$layout" == "macos_native_fullscreen" ]] || continue
+    hold_put "$ws" "$id"
+    "$REAL" macos-native-fullscreen off --window-id "$id" --fail-if-noop >/dev/null 2>&1 || true
+    "$REAL" layout tiling --window-id "$id" >/dev/null 2>&1 || true
+    exited=1
+  done < <("$REAL" list-windows --all --format '%{window-id}|%{window-layout}|%{workspace}' 2>/dev/null || true)
+  if [[ "$exited" == 1 ]]; then
+    sleep 0.2
+  fi
+fi
+
+exec "$REAL" "$@"

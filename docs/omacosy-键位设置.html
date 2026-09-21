@@ -113,7 +113,7 @@
 <body>
 <header>
   <h1>omacosy 当前键位设置</h1>
-  <p class="sub">导出时间：2026-09-20 · 窗口管理器：AeroSpace · Super = Option（⌥）</p>
+  <p class="sub">导出时间：2026-09-21 · 窗口管理器：AeroSpace · Super = Option（⌥）</p>
   <div class="callout">
     <strong>Super 就是 Option（⌥）</strong>。Command（⌘）继续走 macOS 原键：复制粘贴、关标签、退出 App、⌘Tab 切 App。<br>
     Caps Lock 仍是 Caps Lock，方便中文输入法。Karabiner 没有改 Super。<br>
@@ -126,7 +126,8 @@
   <tr><th>键位</th><th>作用</th></tr>
   <tr><td><span class="k">⌥ Enter</span></td><td>打开终端 Ghostty</td></tr>
   <tr><td><span class="k">⌥ Shift Enter</span></td><td>打开浏览器 Chrome</td></tr>
-  <tr><td><span class="k">⌥ Space</span></td><td>打开 Spotlight（搜 App、文件、菜单项、设置）</td></tr>
+  <tr><td><span class="k">⌥ Space</span></td><td>打开 Spotlight（搜 App、文件、菜单项、设置）。⌘Space 同样是 Spotlight</td></tr>
+  <tr><td><span class="k">⌥ K</span></td><td>打开 / 关闭键位提示（Esc 也可关）</td></tr>
   <tr><td><span class="k">⌥ W</span> 或 <span class="k">⌥ Q</span></td><td>关闭当前窗口（⌘W 仍是关标签）</td></tr>
   <tr><td><span class="k">⌥ Shift F</span></td><td>打开家目录（Finder）</td></tr>
   <tr><td><span class="k">⌥ Shift M</span></td><td>打开网易云音乐</td></tr>
@@ -176,8 +177,9 @@
 <table>
   <tr><th>键位</th><th>作用</th></tr>
   <tr><td><span class="k">⌥ Shift T</span></td><td>切到下一套主题（也可点顶栏苹果菜单里的 Next Theme）</td></tr>
+  <tr><td><span class="k">⌥ Shift B</span></td><td>切到当前主题的下一张壁纸</td></tr>
 </table>
-<p class="note">现有主题：azure、enter-the-matrix、monokai-dark、snow-black。当前是 enter-the-matrix。每个主题记住上次选过的颜色，切换回来还是那套。没有单独的主题列表、壁纸选择、颜色选择快捷键。桌面数字雨默认关闭。</p>
+<p class="note">现有主题：azure、enter-the-matrix、monokai-dark、snow-black。当前是 enter-the-matrix。每个主题记住上次选过的颜色和壁纸，切换回来还是那套。没有单独的主题列表或颜色选择快捷键。桌面数字雨默认关闭。</p>
 
 <h2>原来 menu bar 上的功能怎么用</h2>
 <p class="note warn" style="margin-top:0;margin-bottom:10px">系统 File / 编辑 / 显示 菜单栏不出现。也不再从 App 名称弹出菜单。下面这些键和入口仍然有效。</p>
@@ -216,16 +218,16 @@
 <h2>触控板手势（四指）</h2>
 <table>
   <tr><th>手势</th><th>作用</th></tr>
-  <tr><td>四指左右滑</td><td>切换工作区（跟随系统自然滑动方向，循环到头）</td></tr>
+  <tr><td>四指左右滑</td><td>切换当前指针所在显示器的工作区（跟随系统自然滑动方向，含空工作区，循环到头）</td></tr>
   <tr><td>四指上滑</td><td>打开工作区总览</td></tr>
   <tr><td>四指向下滑</td><td>关闭工作区总览</td></tr>
 </table>
-<p class="note">系统自带的四指 Mission Control / 滑桌面已被关掉，避免和 omacosy 手势抢同一套动作。</p>
+<p class="note">系统自带的四指 Mission Control / 滑桌面已被关掉，避免和 omacosy 手势抢同一套动作。页面处于系统原生全屏时，左右滑或总览里点数字会先离开全屏再切工作区；划回原工作区会重新进入全屏。</p>
 
 <h2>工作区总览里</h2>
 <table>
   <tr><th>键位 / 操作</th><th>作用</th></tr>
-  <tr><td>点击卡片 或 <span class="k">1</span>–<span class="k">9</span></td><td>切到对应工作区</td></tr>
+  <tr><td>点击卡片 / 底部数字 或 <span class="k">1</span>–<span class="k">9</span></td><td>切到对应工作区（系统原生全屏里同样有效）</td></tr>
   <tr><td>拖动卡片</td><td>重排工作区</td></tr>
   <tr><td>直接打字</td><td>按窗口标题搜索</td></tr>
   <tr><td><span class="k">Enter</span></td><td>进入第一个搜索结果</td></tr>
@@ -255,7 +257,7 @@
   <tr><td>闲置自动</td><td>所有主题都是 Ghostty + ttfx 屏保</td></tr>
   <tr><td>苹果菜单 → Screensaver</td><td>立刻开屏保</td></tr>
 </table>
-<p class="note">按键或点击会退出屏保。系统设置里的 ScreenSaverEngine 不是这条路径。</p>
+<p class="note">按键或点击会退出屏保并锁屏。系统设置里的 ScreenSaverEngine 不是这条路径。鼠标停在 Dock 上时开屏保，光标会移开，Dock 会收起。</p>
 
 <h2>仍由 macOS 自己负责的键</h2>
 <table>

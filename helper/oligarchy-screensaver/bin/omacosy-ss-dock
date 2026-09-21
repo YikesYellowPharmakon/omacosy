@@ -1,0 +1,53 @@
+#!/bin/bash
+# Hide the Dock for the Ghostty saver, or put autohide-delay back.
+# Autohide stays revealed while the pointer sits on the Dock; warp
+# the cursor to the display centre so the strip can slide away.
+set -euo pipefail
+
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omacosy"
+DELAY_FILE="$STATE/ss-dock-delay"
+mkdir -p "$STATE"
+
+warp_pointer_center() {
+  osascript -l JavaScript -e '
+ObjC.import("CoreGraphics");
+var b = $.CGDisplayBounds($.CGMainDisplayID());
+$.CGWarpMouseCursorPosition($.CGPointMake(
+  b.origin.x + b.size.width / 2,
+  b.origin.y + b.size.height / 2
+));
+$.CGAssociateMouseAndMouseCursorPosition(true);
+' >/dev/null 2>&1 || true
+}
+
+hide() {
+  if [ ! -f "$DELAY_FILE" ]; then
+    if ! defaults read com.apple.dock autohide-delay >"$DELAY_FILE" 2>/dev/null; then
+      echo ABSENT >"$DELAY_FILE"
+    fi
+  fi
+  defaults write com.apple.dock autohide-delay -float 1000
+  warp_pointer_center
+}
+
+restore() {
+  [ -f "$DELAY_FILE" ] || return 0
+  local v
+  v=$(tr -d '[:space:]' <"$DELAY_FILE" || true)
+  rm -f "$DELAY_FILE"
+  if [ -z "$v" ] || [ "$v" = "ABSENT" ]; then
+    defaults delete com.apple.dock autohide-delay >/dev/null 2>&1 || true
+  else
+    defaults write com.apple.dock autohide-delay -float "$v" >/dev/null 2>&1 || true
+  fi
+}
+
+case "${1:-}" in
+  hide) hide ;;
+  warp) warp_pointer_center ;;
+  restore) restore ;;
+  *)
+    echo "usage: omacosy-ss-dock hide|warp|restore" >&2
+    exit 2
+    ;;
+esac

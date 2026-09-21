@@ -377,6 +377,12 @@ link "$REPO_DIR/bin/theme-bg-next" "$HOME/.local/bin/theme-bg-next"
 link "$REPO_DIR/bin/omacosy-toggle" "$HOME/.local/bin/omacosy-toggle"
 link "$REPO_DIR/bin/omacosy-ws" "$HOME/.local/bin/omacosy-ws"
 link "$REPO_DIR/bin/omacosy-focus-guard" "$HOME/.local/bin/omacosy-focus-guard"
+link "$REPO_DIR/bin/omacosy-ws-land" "$HOME/.local/bin/omacosy-ws-land"
+if [ ! -x "$REPO_DIR/bin/omacosy-leave-fs-space" ] || [ "$REPO_DIR/helper/leave-fs-space.c" -nt "$REPO_DIR/bin/omacosy-leave-fs-space" ]; then
+  clang -O2 -framework CoreFoundation -framework CoreGraphics \
+    -o "$REPO_DIR/bin/omacosy-leave-fs-space" "$REPO_DIR/helper/leave-fs-space.c" \
+    || echo "omacosy-leave-fs-space build failed"
+fi
 link "$REPO_DIR/bin/omacosy-exit-native-fs" "$HOME/.local/bin/omacosy-exit-native-fs"
 link "$REPO_DIR/bin/omacosy-ws-collapse" "$HOME/.local/bin/omacosy-ws-collapse"
 link "$REPO_DIR/bin/omacosy-update" "$HOME/.local/bin/omacosy-update"

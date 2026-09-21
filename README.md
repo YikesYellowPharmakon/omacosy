@@ -9,8 +9,8 @@
 On top of upstream's tiling desktop, this machine is tuned to stay a normal Mac instead of a second Linux shell:
 
 - **Super is Option.** Command still does copy, paste, and app switching. Caps Lock stays Caps Lock for the Chinese IME — it is not remapped to Hyper.
-- **Spotlight is the system `Cmd-Space` hotkey only.** Raycast is not installed; Option-Space is not bound.
-- **Default apps** in `config/apps.conf`: Ghostty, Google Chrome, NetEase Cloud Music, ChatGPT (`Option-Shift-Return` / `M` / `G`).
+- **Spotlight is `Cmd-Space` and `Option-Space`.** Raycast is not installed.
+- **Default apps** in `config/apps.conf`: Ghostty, Google Chrome, NetEase Cloud Music, ChatGPT (`Option-Return` / `Option-Shift-Return` / `M` / `G`).
 - **Themes:** azure, enter-the-matrix, monokai-dark, snow-black. Pick one from the bar; the last accent color per theme is remembered. The only extra in the Apple menu is Theme.
 - **Screensaver:** Ghostty + ttfx on the main display only, 120 fps, shuffle-bag so an effect does not repeat until every effect in the set has played. Idle 5 minutes to start, 7 more minutes then display-off and lock. No desktop rain. External screens stay dark covers, not a second saver.
 - **Cheatsheet:** icon-only control on the left of the bar, `Option-K` to toggle. The sheet fits the screen (3 / 2 / 1 columns) instead of drawing off the edge.
@@ -339,28 +339,29 @@ which matches `~/.config/aerospace/aerospace.toml`.
 | `Super+w` / `Super+q` | close window (`Cmd+W` still closes a tab) |
 | `Super+t` | toggle the focused window between tiling and floating |
 | `Super+j` | toggle split direction |
+| `Super+f` | AeroSpace fullscreen (stays on this workspace) |
 | `Super+-` / `Super+=` | resize |
 | `Super+n` | native macOS fullscreen (a separate Space) |
 | `Super+r` | resize mode (`h/j/k/l`, `-`/`=`, `esc`) |
 | `Super+shift+;` | service mode (`esc` reload, `r` flatten, `⌫` close others) |
 | **Apps and system** | |
 | `Super+enter` / `Super+shift+enter` | Ghostty / Chrome |
+| `Super+space` | Spotlight (same as `Cmd+Space`) |
 | `Super+shift+f` / `+m` / `+g` | home folder / NetEase Cloud Music / ChatGPT |
 | `Super+shift+t` | next theme |
+| `Super+shift+b` | next wallpaper of the current theme |
 | `Ctrl+Alt+L` | lock the screen |
 | `Super+k` | keybinding cheatsheet |
 
-Not bound on this fork: `Super+f` (AeroSpace fill/fullscreen is off),
-`Super+space` (Spotlight is only `Cmd+Space`),
-`Super+b` (workspace back-and-forth is `Ctrl+Alt+tab`), `Alt+tab` as a
-window cycle (`Super+tab` is the next workspace; windows are
-`Super+\``), `Super+shift+b` (no wallpaper cycle), `Super+shift+l`
-(lock is `Ctrl+Alt+L`).
+Not bound on this fork: `Super+b` (workspace back-and-forth is
+`Ctrl+Alt+tab`), `Alt+tab` as a window cycle (`Super+tab` is the next
+workspace; windows are `Super+\``), `Super+shift+l` (lock is
+`Ctrl+Alt+L`).
 
-![The keybinding cheatsheet — every binding, parsed from aerospace.toml](docs/screenshots/cheatsheet.jpg)
+![The keybinding cheatsheet — every binding, from docs/omacosy-键位设置.html](docs/screenshots/cheatsheet.jpg)
 
 Screenshots, clipboard, app switching and Spotlight stay macOS's own
-(`Cmd+Shift+3/4/5`, `Cmd+C/V`, `Cmd+Tab`, `Cmd+Space`).
+(`Cmd+Shift+3/4/5`, `Cmd+C/V`, `Cmd+Tab`, `Cmd+Space` / `Super+Space`).
 
 **On the modifier space.** Super is Option, so Command stays free for
 macOS and Shift is the extra layer. Lock is `Ctrl+Alt+L`. Overflow
@@ -389,11 +390,11 @@ individually, so anything you opened while undocked stays put.
 `theme-set <name>` switches everything at once: bar, borders, wallpaper
 on every display, and any terminal that follows omarchy's
 `~/.config/omarchy/current/theme` convention (the author's does).
-`Super+Shift+T` cycles. This fork does not bind `Super+Shift+B`;
-`theme-bg-next` still exists as a script if you want it from a
-terminal. Each theme keeps the last chosen accent.
+`Super+Shift+T` cycles themes. `Super+Shift+B` cycles the current
+theme's wallpapers. Each theme keeps the last chosen accent and
+wallpaper.
 
-Themes: `tokyo-night`, `catppuccin`, `gruvbox`, `osaka-jade`. Each
+Themes: `azure`, `enter-the-matrix`, `monokai-dark`, `snow-black`. Each
 `themes/<name>/` holds `colors.toml` (omarchy's 22-color palette),
 `sketchybar.sh` / `borders.sh` (bar and ring colors; the file keeps its
 omarchy name and format, and the ring uses the theme accent, omarchy's

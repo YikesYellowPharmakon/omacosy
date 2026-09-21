@@ -2502,8 +2502,8 @@ final class CheatsheetView: NSView {
             if filter.isEmpty { hideCheatsheet() } else { filter = ""; refit() }
         case 51: // backspace
             if !filter.isEmpty { filter.removeLast(); refit() }
-        case 40 where event.modifierFlags.contains([.command, .control, .option]):
-            hideCheatsheet() // Super+K toggles closed even while we hold key
+        case 40 where event.modifierFlags.contains(.option):
+            hideCheatsheet() // Super is Option: ⌥K closes while the sheet holds key
         default:
             guard let chars = event.charactersIgnoringModifiers,
                 !chars.isEmpty,

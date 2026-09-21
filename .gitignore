@@ -8,6 +8,7 @@ config/aerospace/aerospace.toml
 *.pyc
 signing/
 *.p12
+bin/omacosy-leave-fs-space
 helper/oligarchy-screensaver/bin/omacosy-ss-guard
 helper/oligarchy-screensaver/bin/omacosy-session-locked
 helper/vapor-sys-saver/test_render

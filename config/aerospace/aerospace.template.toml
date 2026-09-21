@@ -52,20 +52,18 @@ on-focus-changed = ['exec-and-forget /bin/bash -c "$HOME/.local/bin/omacosy-arra
 # Tell the bar which workspace is focused — a bash builtin redirect,
 # no extra process, and a regular file so a dead reader cannot wedge it
 exec-on-workspace-change = ['/bin/bash', '-c',
-  'touch /tmp/omacosy-ws-switch; echo "$AEROSPACE_FOCUSED_WORKSPACE" > /tmp/omacosy-bar-ws; $HOME/.local/bin/omacosy-focus-guard; $HOME/.local/bin/omacosy-arrange; $HOME/.local/bin/omacosy-tray --ensure-watch'
+  'touch /tmp/omacosy-ws-switch; echo "$AEROSPACE_FOCUSED_WORKSPACE" > /tmp/omacosy-bar-ws; $HOME/.local/bin/omacosy-focus-guard; $HOME/.local/bin/omacosy-ws-land; $HOME/.local/bin/omacosy-arrange; $HOME/.local/bin/omacosy-tray --ensure-watch'
 ]
 
 [gaps]
 inner.horizontal = 8
 inner.vertical = 8
-outer.left = 8
-outer.bottom = 8
-outer.right = 8
-# room for the 34px bar + 8px breathing. Official omacosy uses 10 on
-# notched built-ins (usable space already starts below the notch). This
-# machine's built-in reports no notch, so it needs the flat-monitor gap
-# or tiled windows sit under the bar and the top edge looks wrong.
-outer.top = 42
+# 2 = ring width; 0 clips the border at the screen edge.
+outer.left = 2
+outer.bottom = 2
+outer.right = 2
+# macOS 27 still insets visibleFrame ~31pt with the menu bar hidden.
+outer.top = 7
 
 # Fixed-size settings windows fight the tiler (resize -> snap back ->
 # relayout flicker); float them instead.

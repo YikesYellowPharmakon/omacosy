@@ -1,0 +1,54 @@
+#!/bin/bash
+# After a workspace switch:
+#  - if we are still sitting in native fullscreen (socket swipe / Super+N
+#    bypass aerospace-wrap), leave it and remember the window
+#  - if this destination has a parked fullscreen page, put it back
+set -euo pipefail
+
+REAL="${AEROSPACE_REAL:-/opt/homebrew/Caskroom/aerospace/0.21.3-Beta/AeroSpace-v0.21.3-Beta/bin/aerospace}"
+[ -x "$REAL" ] || REAL=/opt/homebrew/Caskroom/aerospace/0.21.3-Beta/AeroSpace-v0.21.3-Beta/bin/aerospace
+[ -x "$REAL" ] || exit 0
+
+HOLD="${XDG_STATE_HOME:-$HOME/.local/state}/omacosy/fs-hold"
+mkdir -p "$(dirname "$HOLD")"
+touch "$HOLD"
+
+hold_put() {
+  local ws="$1" id="$2" tmp
+  tmp=$(mktemp)
+  awk -v ws="$ws" '$1 != ws' "$HOLD" >"$tmp" 2>/dev/null || true
+  printf '%s %s\n' "$ws" "$id" >>"$tmp"
+  mv "$tmp" "$HOLD"
+}
+
+hold_take() {
+  local ws="$1" tmp
+  awk -v ws="$ws" '$1 == ws { print $2; exit }' "$HOLD" 2>/dev/null || true
+  tmp=$(mktemp)
+  awk -v ws="$ws" '$1 != ws' "$HOLD" >"$tmp" 2>/dev/null || true
+  mv "$tmp" "$HOLD"
+}
+
+WS="${AEROSPACE_FOCUSED_WORKSPACE:-}"
+if [ -z "$WS" ]; then
+  WS=$("$REAL" list-workspaces --focused 2>/dev/null | head -n1 || true)
+fi
+[ -n "$WS" ] || exit 0
+
+front=$("$REAL" list-windows --focused --format '%{window-id}|%{window-layout}|%{workspace}' 2>/dev/null | head -n1 || true)
+front_id=${front%%|*}
+rest=${front#*|}
+front_layout=${rest%%|*}
+front_ws=${front##*|}
+
+if [ "$front_layout" = "macos_native_fullscreen" ] && [ "$front_ws" != "$WS" ]; then
+  hold_put "$front_ws" "$front_id"
+  "$REAL" macos-native-fullscreen off --window-id "$front_id" --fail-if-noop >/dev/null 2>&1 || true
+  "$REAL" layout tiling --window-id "$front_id" >/dev/null 2>&1 || true
+  date +%s > /tmp/omacosy-ws-switch
+fi
+
+id=$(hold_take "$WS")
+[ -n "$id" ] || exit 0
+"$REAL" focus --window-id "$id" >/dev/null 2>&1 || true
+"$REAL" macos-native-fullscreen on --window-id "$id" --fail-if-noop >/dev/null 2>&1 || true
