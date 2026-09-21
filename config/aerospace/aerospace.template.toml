@@ -30,7 +30,7 @@ accordion-padding = 30
 default-root-container-layout = 'tiles'
 # 'auto' = split along the monitor's longer edge, which is the same
 # rule the dwindle hint below applies to every window after it
-default-root-container-orientation = 'auto'
+default-root-container-orientation = 'horizontal'
 
 on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
 
@@ -47,12 +47,12 @@ on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
 # keyboard commands AND for the focus omacosy-ffm moves under the mouse
 # (it does notice those, despite moving focus via SLPS itself).
 # AEROSPACE_WINDOW_ID names the newly focused window.
-on-focus-changed = ['exec-and-forget /bin/bash -c "$HOME/.local/bin/omacosy-helper split-hint; $HOME/.local/bin/omacosy-tray --ensure-watch"']
+on-focus-changed = ['exec-and-forget /bin/bash -c "$HOME/.local/bin/omacosy-arrange; $HOME/.local/bin/omacosy-helper split-hint; $HOME/.local/bin/omacosy-tray --ensure-watch"']
 
 # Tell the bar which workspace is focused — a bash builtin redirect,
 # no extra process, and a regular file so a dead reader cannot wedge it
 exec-on-workspace-change = ['/bin/bash', '-c',
-  'touch /tmp/omacosy-ws-switch; echo "$AEROSPACE_FOCUSED_WORKSPACE" > /tmp/omacosy-bar-ws; $HOME/.local/bin/omacosy-focus-guard; $HOME/.local/bin/omacosy-tray --ensure-watch'
+  'touch /tmp/omacosy-ws-switch; echo "$AEROSPACE_FOCUSED_WORKSPACE" > /tmp/omacosy-bar-ws; $HOME/.local/bin/omacosy-focus-guard; $HOME/.local/bin/omacosy-arrange; $HOME/.local/bin/omacosy-tray --ensure-watch'
 ]
 
 [gaps]
@@ -87,6 +87,15 @@ run = 'layout floating'
 if.app-id = 'com.mitchellh.ghostty'
 if.window-title-regex-substring = 'omacosy-screensaver'
 run = ['layout floating', 'fullscreen on --no-outer-gaps']
+
+[[on-window-detected]]
+if.app-id = 'com.google.Chrome'
+if.window-title-regex-substring = 'Picture-in-Picture'
+run = 'layout floating'
+
+[[on-window-detected]]
+if = 'true'
+run = 'exec-and-forget $HOME/.local/bin/omacosy-arrange --new'
 
 # Super = Option (⌥). Command stays macOS (copy/paste/tabs/quit/Cmd+Tab).
 # Caps Lock is Caps Lock again (Chinese IME). No Karabiner Super remap.

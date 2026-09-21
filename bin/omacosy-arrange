@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Original omacosy auto-arrange (AeroSpace dwindle):
+#   1 window  — tiled in the usable area (gaps, not edge-to-edge)
+#   2 windows — left / right
+#   3+        — tile; split-hint dwindles the next insert
+# No green-button unlock, no float memory. ⌥T still toggles one window.
+set -uo pipefail
+A="$(command -v aerospace || echo /opt/homebrew/bin/aerospace)"
+[ -x "$A" ] || exit 0
+
+CMD=run
+[ "${1:-}" = "--new" ] && CMD=new
+
+LOCK="/tmp/omacosy-arrange-$(id -u)"
+if [ -f "$LOCK" ]; then
+  now=$(date +%s)
+  then=$(stat -f %m "$LOCK" 2>/dev/null || echo 0)
+  if [ $((now - then)) -lt 2 ]; then
+    exit 0
+  fi
+  rm -f "$LOCK"
+fi
+trap 'rm -f "$LOCK"' EXIT
+touch "$LOCK"
+
+WS="$("$A" list-workspaces --focused 2>/dev/null | head -1)"
+[ -n "$WS" ] || WS=1
+printf '%s\n' "$WS" > /tmp/omacosy-bar-ws
+
+keep_float() {
+  case "$1" in
+    org.pqrs.Karabiner-Elements.Settings|com.apple.systempreferences|com.apple.Preferences)
+      return 0 ;;
+  esac
+  case "$2" in
+    *omacosy-activity*|*omacosy-screensaver*|*Picture-in-Picture*)
+      return 0 ;;
+  esac
+  return 1
+}
+
+if "$A" list-windows --workspace focused --format '%{window-title}' 2>/dev/null \
+    | grep -q 'omacosy-screensaver'; then
+  exit 0
+fi
+
+NORMAL_IDS=()
+NORMAL_LAY=()
+while IFS='|' read -r wid bid title lay; do
+  [ -n "$wid" ] || continue
+  keep_float "$bid" "$title" && continue
+  NORMAL_IDS+=("$wid")
+  NORMAL_LAY+=("$lay")
+done < <("$A" list-windows --workspace focused --format '%{window-id}|%{app-bundle-id}|%{window-title}|%{window-layout}' 2>/dev/null)
+
+n=${#NORMAL_IDS[@]}
+
+# Leave a real native-fullscreen Space alone.
+if "$A" list-windows --workspace focused --format '%{window-layout}' 2>/dev/null \
+    | grep -qx 'macos_native_fullscreen'; then
+  exit 0
+fi
+if "$A" list-windows --focused --format '%{window-layout}' 2>/dev/null \
+    | grep -qx 'macos_native_fullscreen'; then
+  exit 0
+fi
+
+# AeroSpace "fullscreen" is a fill overlay — that is what made a click
+# look like the app ate the screen. Turn it off, then tile.
+i=0
+while [ "$i" -lt "$n" ]; do
+  lay="${NORMAL_LAY[$i]}"
+  wid="${NORMAL_IDS[$i]}"
+  if [ "$lay" = "fullscreen" ]; then
+    "$A" fullscreen off --window-id "$wid" --fail-if-noop >/dev/null 2>&1 || \
+      "$A" fullscreen --window-id "$wid" >/dev/null 2>&1 || true
+  fi
+  if [ "$lay" = "floating" ] || [ "$lay" = "fullscreen" ]; then
+    "$A" layout tiling --window-id "$wid" >/dev/null 2>&1 || true
+  fi
+  i=$((i + 1))
+done
+
+NFILE="/tmp/omacosy-arrange-n-$(id -u)"
+prev=0
+[ -f "$NFILE" ] && prev=$(cat "$NFILE" 2>/dev/null || echo 0)
+
+if [ "$n" -le 1 ]; then
+  if [ "$n" -eq 1 ]; then
+    "$A" split --window-id "${NORMAL_IDS[0]}" horizontal >/dev/null 2>&1 || true
+  fi
+  echo "$n" > "$NFILE"
+  exit 0
+fi
+
+# Oldest first so a newly tiled window joins to the right of the first.
+i=0
+while [ "$i" -lt "$n" ]; do
+  j=$((i + 1))
+  while [ "$j" -lt "$n" ]; do
+    if [ "${NORMAL_IDS[$j]}" -lt "${NORMAL_IDS[$i]}" ] 2>/dev/null; then
+      t="${NORMAL_IDS[$i]}"; NORMAL_IDS[$i]="${NORMAL_IDS[$j]}"; NORMAL_IDS[$j]="$t"
+      t="${NORMAL_LAY[$i]}"; NORMAL_LAY[$i]="${NORMAL_LAY[$j]}"; NORMAL_LAY[$j]="$t"
+    fi
+    j=$((j + 1))
+  done
+  i=$((i + 1))
+done
+
+if [ "$n" -eq 2 ] && [ "$CMD" = "new" ]; then
+  old="${NORMAL_IDS[0]}"
+  new="${NORMAL_IDS[1]}"
+  "$A" eval -- "layout tiling --window-id $old; split horizontal --window-id $old; layout tiling --window-id $new" >/dev/null 2>&1 || {
+    "$A" layout tiling --window-id "$old" >/dev/null 2>&1 || true
+    "$A" split --window-id "$old" horizontal >/dev/null 2>&1 || true
+    "$A" layout tiling --window-id "$new" >/dev/null 2>&1 || true
+  }
+  echo "$n" > "$NFILE"
+  exit 0
+fi
+
+# Closing 3+ down to a pair, or first pair: flatten leftover vertical dwindle.
+if [ "$n" -eq 2 ] && [ "$prev" != 2 ]; then
+  "$A" flatten-workspace-tree >/dev/null 2>&1 || true
+  "$A" layout tiles horizontal --root >/dev/null 2>&1 || true
+fi
+
+echo "$n" > "$NFILE"

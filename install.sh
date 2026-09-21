@@ -250,6 +250,13 @@ if [ ! -x "$HOME/.local/bin/omacosy-borders" ] || [ "$REPO_DIR/helper/borders.sw
   log "Building omacosy-borders"
   swiftc -O -F /System/Library/PrivateFrameworks -framework SkyLight -o "$HOME/.local/bin/omacosy-borders" "$REPO_DIR/helper/borders.swift"
 fi
+
+if [ ! -x "$HOME/.local/bin/omacosy-menubar-hide" ] || [ "$REPO_DIR/helper/menubar-hide.swift" -nt "$HOME/.local/bin/omacosy-menubar-hide" ]; then
+  log "Building omacosy-menubar-hide"
+  swiftc -O -F /System/Library/PrivateFrameworks -framework SkyLight \
+    -o "$HOME/.local/bin/omacosy-menubar-hide" "$REPO_DIR/helper/menubar-hide.swift"
+  codesign -f -s - --identifier com.omacosy.menubar-hide "$HOME/.local/bin/omacosy-menubar-hide" 2>/dev/null || true
+fi
 # stable code identity so TCC grants survive rebuilds (skipped when no
 # signing identity is present — then re-grant after each rebuild)
 if security find-identity -p codesigning -v 2>/dev/null | grep -q "Apple Development"; then
@@ -270,6 +277,14 @@ else
   log "  the Accessibility/Bluetooth grants and you must re-add them in"
   log "  System Settings > Privacy & Security. Free fix: Xcode > Settings >"
   log "  Accounts > Manage Certificates > + > Apple Development, then re-run."
+fi
+# a tray rebuilt outside install.sh keeps the filename identity and
+# shows up as a second Accessibility toggle; put it back on ffm
+if [ -x "$HOME/.local/bin/omacosy-tray" ]; then
+  id="$(codesign -dv "$HOME/.local/bin/omacosy-tray" 2>&1 | awk -F= '/^Identifier=/{print $2; exit}')"
+  if [ -n "$id" ] && [ "$id" != "omacosy-ffm" ]; then
+    codesign -f -s - --identifier omacosy-ffm "$HOME/.local/bin/omacosy-tray" 2>/dev/null || true
+  fi
 fi
 # (omacosy-gesture is signed in section 5, right after its build —
 # the makefile re-signs ad-hoc as part of the build, so signing here
@@ -317,6 +332,23 @@ PLIST
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" 2>/dev/null || true
 launchctl load "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist"
 
+cat > "$HOME/Library/LaunchAgents/com.omacosy.menubar-hide.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.omacosy.menubar-hide</string>
+  <key>ProgramArguments</key><array><string>$HOME/.local/bin/omacosy-menubar-hide</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>StandardErrorPath</key><string>/tmp/omacosy-menubar-hide.err</string>
+</dict>
+</plist>
+PLIST
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.menubar-hide.plist" 2>/dev/null || true
+launchctl load "$HOME/Library/LaunchAgents/com.omacosy.menubar-hide.plist"
 
 cat > "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -353,6 +385,7 @@ link "$REPO_DIR/bin/omacosy-wm-switch" "$HOME/.local/bin/omacosy-wm-switch"
 link "$REPO_DIR/bin/omacosy-karabiner-omniwm" "$HOME/.local/bin/omacosy-karabiner-omniwm"
 link "$REPO_DIR/bin/omacosy-layout" "$HOME/.local/bin/omacosy-layout"
 link "$REPO_DIR/bin/omacosy-float" "$HOME/.local/bin/omacosy-float"
+link "$REPO_DIR/bin/omacosy-arrange" "$HOME/.local/bin/omacosy-arrange"
 link "$REPO_DIR/bin/omacosy-cycle" "$HOME/.local/bin/omacosy-cycle"
 link "$REPO_DIR/bin/omacosy-pkd-guard" "$HOME/.local/bin/omacosy-pkd-guard"
 

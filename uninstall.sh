@@ -26,12 +26,14 @@ launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.borders.plist" 2>/dev/n
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.borders.plist" "$HOME/.local/bin/omacosy-borders"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" "$HOME/.local/bin/omacosy-ffm"
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.menubar-hide.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.omacosy.menubar-hide.plist" "$HOME/.local/bin/omacosy-menubar-hide"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" "$HOME/.local/bin/omacosy-dwindle"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" "$HOME/.local/bin/omacosy-bar"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.tray.plist" 2>/dev/null || true
-rm -f "$HOME/Library/LaunchAgents/com.omacosy.tray.plist" "$HOME/.local/bin/omacosy-tray"
+rm -f "$HOME/Library/LaunchAgents/com.omacosy.tray.plist" "$HOME/.local/bin/omacosy-tray" "$HOME/.local/bin/omacosy-spotlight"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.pkd-guard.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.pkd-guard.plist" "$HOME/.local/bin/omacosy-pkd-guard"
 rm -f "$HOME/.local/state/omacosy/tray-cmd"
@@ -154,7 +156,7 @@ fi
 
 # theme-set / theme-next out of ~/.local/bin — only when they are OUR
 # symlinks (a user's own script of the same name survives)
-for t in theme-set theme-next theme-bg-next omacosy-ws omacosy-toggle omacosy-focus-guard omacosy-exit-native-fs omacosy-ws-collapse omacosy-float omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-wm-switch omacosy-karabiner-omniwm; do
+for t in theme-set theme-next theme-bg-next omacosy-ws omacosy-toggle omacosy-focus-guard omacosy-exit-native-fs omacosy-ws-collapse omacosy-float omacosy-arrange omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-wm-switch omacosy-karabiner-omniwm; do
   target="$(readlink "$HOME/.local/bin/$t" 2>/dev/null || true)"
   case "$target" in *omacosy*) rm -f "$HOME/.local/bin/$t" ;; esac
 done

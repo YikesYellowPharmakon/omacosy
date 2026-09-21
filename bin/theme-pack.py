@@ -1193,8 +1193,10 @@ def apply_macos(colors: dict[str, str]) -> None:
     if ghostty.is_file():
         subprocess.run([str(ghostty), "+reload-config"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     broadcast_chrome()
-    for app in ("Finder", "Dock", "SystemUIServer"):
-        subprocess.run(["killall", app], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Do not kill Finder / Dock / SystemUIServer. Those restarts race
+    # omacosy-menubar-hide's SkyLight calls and can wedge WindowServer
+    # so the session only comes back after a reboot. Appearance updates
+    # go out through the distributed notifications above.
 
 
 def broadcast_chrome() -> None:

@@ -1,19 +1,22 @@
 # omacosy
 
 > This is a personal customization of [omacosy](https://github.com/paulsp94/omacosy) by [paulsp94](https://github.com/paulsp94). The original project is inspired by [omarchy](https://omarchy.org). Please star and support the upstream repo.
+>
+> **Known limit:** macOS Sequoia's green-button hover/long-press tiling menu cannot be disabled or made to match this rice's auto-arrange. Use Option chords for layout; leave the green button as the system fullscreen / Split View hatch.
 
 ## What this fork changes
 
 On top of upstream's tiling desktop, this machine is tuned to stay a normal Mac instead of a second Linux shell:
 
 - **Super is Option.** Command still does copy, paste, and app switching. Caps Lock stays Caps Lock for the Chinese IME — it is not remapped to Hyper.
-- **The launcher is Spotlight** (`Option-Space`). Raycast is not installed.
+- **Spotlight is the system `Cmd-Space` hotkey only.** Raycast is not installed; Option-Space is not bound.
 - **Default apps** in `config/apps.conf`: Ghostty, Google Chrome, NetEase Cloud Music, ChatGPT (`Option-Shift-Return` / `M` / `G`).
 - **Themes:** azure, enter-the-matrix, monokai-dark, snow-black. Pick one from the bar; the last accent color per theme is remembered. The only extra in the Apple menu is Theme.
 - **Screensaver:** Ghostty + ttfx on the main display only, 120 fps, shuffle-bag so an effect does not repeat until every effect in the set has played. Idle 5 minutes to start, 7 more minutes then display-off and lock. No desktop rain. External screens stay dark covers, not a second saver.
 - **Cheatsheet:** icon-only control on the left of the bar, `Option-K` to toggle. The sheet fits the screen (3 / 2 / 1 columns) instead of drawing off the edge.
 - **Sequoia plugin guard:** `omacosy-pkd-guard` runs at login and every 5 minutes. If System Settings panes or the iCloud Drive file provider drop out of pluginkit, it only re-adds the matching `/System` appexes. Not resident, no GPU.
 - **SIP stays on.** Ice, SketchyBar, and JankyBorders are not reinstalled.
+- **Known limit — Sequoia green button.** Layout is `omacosy-arrange` (one tiled window in the usable area, two left/right, three+ dwindle). Sequoia's green-button hover/long-press tiling menu has no supported off switch, and its tiles follow the system `visibleFrame`, not the omacosy bar + `outer.top`. Intercepting that button was tried and withdrawn: the picker is a separate Window Manager UI, and routing the click into native fullscreen left new windows filling the screen or stuck on the left. This fork does not intercept it. The green button stays the system fullscreen / Split View hatch — do not use it to arrange.
 
 Full chord list: [`docs/omacosy-键位设置.html`](docs/omacosy-键位设置.html).
 
@@ -96,7 +99,7 @@ grant hide themselves rather than half-work.
 | Grant | Who asks | What it does | Without it |
 |---|---|---|---|
 | **Accessibility** | AeroSpace *or* OmniWM, `omacosy-gesture`, `omacosy-bar` (reads the focused app's menus for the app-pill popup), `omacosy-ffm` (AeroSpace mode only) | Move, resize and focus other apps' windows. This is the tiling itself, and it is the broadest permission here. | Nothing tiles. Not optional in practice. |
-| **Input Monitoring** | Karabiner-Elements, `omacosy-gesture` (and OmniWM, under that option) | Karabiner reads keys to remap Caps Lock; `omacosy-gesture` reads raw trackpad contacts, because macOS 26 stopped carrying touch data in normal events. | No Super key, no swipe gestures. |
+| **Input Monitoring** | `omacosy-gesture` (Karabiner-Elements is still a Homebrew dep from upstream; this fork does not remap Caps Lock) | `omacosy-gesture` reads raw trackpad contacts, because macOS 26 stopped carrying touch data in normal events. Super is Option and does not need Karabiner. | No swipe gestures. Super still works. |
 | **Screen Recording** | `omacosy-overview` | Captures a thumbnail per window for the overview cards, including windows the window manager has stashed offscreen. A screenshot of the visible screen could not see those. | Cards fall back to app icons and titles. |
 | **Bluetooth** | `omacosy-bar` | Reads adapter power and the paired-device list for the bluetooth pill and its menu. | The pill hides itself. |
 | **Location** | `omacosy-bar` | Reads **only** the wi-fi network's name, which macOS classes as location data. No coordinate is ever requested; the authorisation itself is what unlocks `CWInterface.ssid()`. | The wi-fi popup's title row reads "wi-fi" instead of your network's name. Everything else is unaffected. |
@@ -124,13 +127,15 @@ Refuse the grant and you lose the name, nothing else.
   sudo, installs no LaunchDaemon, and every helper it builds runs as
   you, in your login session.
 - **Karabiner-Elements does run as root, and you should know that
-  before installing.** It is a Homebrew dependency here, purely to turn
-  Caps Lock into Super. It ships a DriverKit system extension plus
-  daemons that run as root (`Karabiner-VirtualHIDDevice-Daemon`,
-  `Karabiner-Core-Service`); that is what the driver-extension approval
-  during install is. It is the most privileged thing this repo puts on
-  your Mac, and it is third-party. Skip it if that trade is wrong for
-  you; you lose the Super key and keep everything else.
+  before installing.** It is a Homebrew dependency from upstream. This
+  fork does not use it to turn Caps Lock into Super — Super is Option,
+  and Caps Lock stays Caps Lock for the Chinese IME. It still ships a
+  DriverKit system extension plus daemons that run as root
+  (`Karabiner-VirtualHIDDevice-Daemon`, `Karabiner-Core-Service`); that
+  is what the driver-extension approval during install is. It is the
+  most privileged thing this repo puts on your Mac, and it is
+  third-party. Skip it if that trade is wrong for you; Super and
+  everything else still work.
 - **Nothing here reads your keystrokes.** No omacosy binary opens a
   keyboard event tap. Only Karabiner sees keys, which is inherent to
   remapping one. `omacosy-gesture`'s event tap is gesture-only and
@@ -310,55 +315,56 @@ startup and does no config-file or image-file I/O while it draws.
 
 ## Keybindings — this fork: Super = Option
 
-Karabiner remaps Caps Lock to `cmd+ctrl+alt` (a combo macOS never
-uses), so omarchy's scheme works letter-for-letter without breaking
-typing or app shortcuts. Caps Lock tapped alone is Escape.
+Super is Option. Command stays macOS. Caps Lock stays Caps Lock for
+the Chinese IME — Karabiner does not remap it. The bar cheatsheet is
+rendered from [`docs/omacosy-键位设置.html`](docs/omacosy-键位设置.html),
+which matches `~/.config/aerospace/aerospace.toml`.
 
 | Chord | Action |
 |---|---|
 | **Navigation** | |
 | `Super+1..9` | switch to this display's workspace N |
 | `Super+tab` / `Super+shift+tab` | next / previous workspace, within this display's set |
-| `Super+b` | back and forth between the last two workspaces |
-| `Alt+tab` / `Alt+shift+tab` | cycle windows **on this workspace**, floats included |
-| `Ctrl+Alt+tab` | cycle focus between displays |
+| `Ctrl+Alt+tab` | last two workspaces |
+| `Super+\`` / `Super+shift+\`` | cycle windows **on this workspace**, floats included |
+| `Ctrl+Alt+Shift+tab` | cycle focus between displays |
 | `Super+arrows` | focus the window in that direction |
 | `Super+s` | surface the next floating window (and bring the cursor) |
 | **Moving windows** | |
-| `Super+shift+arrows` | AeroSpace: move the window in that direction. OmniWM: **swap** tiles (`ctrl+opt+shift+arrows` stacks into the neighbor as a group instead) |
+| `Super+shift+arrows` | move the window in that direction |
 | `Super+shift+1..9` | move the window to workspace N and follow it |
 | `Super+shift+o` | throw the window to the same slot on the other display |
 | `Super+shift+space` | throw the WHOLE workspace to the other display |
 | **Layout** | |
-| `Super+w` | close window |
-| `Super+t` | toggle floating |
+| `Super+w` / `Super+q` | close window (`Cmd+W` still closes a tab) |
+| `Super+t` | toggle the focused window between tiling and floating |
 | `Super+j` | toggle split direction |
 | `Super+-` / `Super+=` | resize |
-| `Super+f` | fullscreen — on notched displays the camera strip is blacked out so it reads as true fullscreen, while the window stays in its workspace (swipes still reach it) |
-| `Super+n` | native macOS fullscreen (a separate Space — outside the workspace model, avoid unless an app needs it) |
-| `Super+r` | resize mode (`h/j/k/l`, `-`/`=`, `esc`) — AeroSpace only; OmniWM has no binding modes |
+| `Super+n` | native macOS fullscreen (a separate Space) |
+| `Super+r` | resize mode (`h/j/k/l`, `-`/`=`, `esc`) |
 | `Super+shift+;` | service mode (`esc` reload, `r` flatten, `⌫` close others) |
 | **Apps and system** | |
-| `Super+enter` / `Super+shift+enter` | terminal / browser |
-| `Super+space` | launcher — this fork: Spotlight. Upstream: Raycast (OmniWM option: its command palette) |
-| `Super+shift+f` / `+m` / `+g` | files / music / messenger (set in `apps.conf`) |
+| `Super+enter` / `Super+shift+enter` | Ghostty / Chrome |
+| `Super+shift+f` / `+m` / `+g` | home folder / NetEase Cloud Music / ChatGPT |
 | `Super+shift+t` | next theme |
-| `Super+shift+b` | next wallpaper of the current theme |
-| `Super+shift+l` | lock the screen |
-| `Super+k` | keybinding cheatsheet (this table, rendered from the config) |
+| `Ctrl+Alt+L` | lock the screen |
+| `Super+k` | keybinding cheatsheet |
+
+Not bound on this fork: `Super+f` (AeroSpace fill/fullscreen is off),
+`Super+space` (Spotlight is only `Cmd+Space`),
+`Super+b` (workspace back-and-forth is `Ctrl+Alt+tab`), `Alt+tab` as a
+window cycle (`Super+tab` is the next workspace; windows are
+`Super+\``), `Super+shift+b` (no wallpaper cycle), `Super+shift+l`
+(lock is `Ctrl+Alt+L`).
 
 ![The keybinding cheatsheet — every binding, parsed from aerospace.toml](docs/screenshots/cheatsheet.jpg)
 
-Screenshots, clipboard and app switching stay macOS's own
-(`Cmd+Shift+3/4/5`, `Cmd+C/V`, `Cmd+Tab`). `Alt+Tab` above is the
-*window*-scoped switcher macOS lacks.
+Screenshots, clipboard, app switching and Spotlight stay macOS's own
+(`Cmd+Shift+3/4/5`, `Cmd+C/V`, `Cmd+Tab`, `Cmd+Space`).
 
-**On the modifier space.** omarchy layers `Super+Ctrl` and `Super+Alt`
-on top of `Super`. This setup cannot: Super IS `cmd+ctrl+alt`, so those
-modifiers are already spent and Shift is the only layer left, two
-against omarchy's four. Bindings that would collide are re-homed by
-mnemonic (lock is `Super+Shift+L`, not `Super+Ctrl+L`), and the
-overflow lives in binding modes instead.
+**On the modifier space.** Super is Option, so Command stays free for
+macOS and Shift is the extra layer. Lock is `Ctrl+Alt+L`. Overflow
+lives in binding modes.
 
 Each display owns an independent set of nine workspaces, omarchy style:
 main holds 1–9, secondary holds 11–19. Same last digit means the same
@@ -383,12 +389,9 @@ individually, so anything you opened while undocked stays put.
 `theme-set <name>` switches everything at once: bar, borders, wallpaper
 on every display, and any terminal that follows omarchy's
 `~/.config/omarchy/current/theme` convention (the author's does).
-`Super+Shift+T` cycles.
-
-Each theme ships omarchy's full wallpaper set. `Super+Shift+B` (or
-`theme-bg-next`) cycles through them; `theme-bg-next <path>` sets any
-image you like. Switching themes restarts at the theme's first
-wallpaper.
+`Super+Shift+T` cycles. This fork does not bind `Super+Shift+B`;
+`theme-bg-next` still exists as a script if you want it from a
+terminal. Each theme keeps the last chosen accent.
 
 Themes: `tokyo-night`, `catppuccin`, `gruvbox`, `osaka-jade`. Each
 `themes/<name>/` holds `colors.toml` (omarchy's 22-color palette),
@@ -404,9 +407,10 @@ MIT-licensed theme packs). Copy a directory to add one.
 AeroSpace natively inserts new windows as equal siblings, so three
 windows become three columns. Hyprland's dwindle splits the focused
 window along its own longer edge instead: a new window lands beside a
-wide window and below a tall one. That is the omarchy feel, and on a
-3440-wide display it is also the difference between a usable third
-window and three narrow strips.
+wide window and below a tall one. This fork's first pair is always
+left/right (`default-root-container-orientation = horizontal`); a
+later window stacks only when the focused pane is taller than it is
+wide.
 
 AeroSpace cannot express that rule. Its config language has no window
 geometry; the format variables are ids, titles and container layouts,
