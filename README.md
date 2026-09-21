@@ -3,6 +3,23 @@
 > 本仓库是在 [paulsp94/omacosy](https://github.com/paulsp94/omacosy) 之上的个人定制，并参考了 [omarchy](https://omarchy.org)。
 > This is a personal customization of [omacosy](https://github.com/paulsp94/omacosy) by [paulsp94](https://github.com/paulsp94). The original project is inspired by [omarchy](https://omarchy.org). Please star and support the upstream repo.
 
+## 这套 rice 和上游差在哪
+
+在上游「平铺 + 一条顶栏 + 一套主题」之上，这台机器上的版本刻意做成更像日常 Mac，而不是再装一层 Linux 桌面：
+
+- **Super 是 Option（⌥）**，Command 仍是系统复制粘贴 / 切应用。Caps Lock 留给中文输入法，不经过 Karabiner 改成 Hyper。
+- **启动器是 Spotlight**（⌥ Space）。没有 Raycast。
+- **默认应用**：Ghostty、Chrome、网易云音乐、ChatGPT（`config/apps.conf`；⌥ Shift Enter / M / G）。
+- **主题**：azure、enter-the-matrix、monokai-dark、snow-black。顶栏可点选主题，强调色按主题记住。系统菜单额外项只留 Theme。
+- **屏保**：主屏 Ghostty + ttfx，120fps，一轮内不重复特效；空闲 5 分钟出现，再播 7 分钟熄屏并锁屏。扩展屏不跟播。桌面雨关掉。
+- **键位表**：顶栏左侧一个图标，⌥K 开关，窗口按屏幕宽度收成 3/2/1 列，不会画出屏。
+- **Sequoia 插件自检**：`omacosy-pkd-guard` 开机并每 5 分钟看一眼系统设置 / iCloud 云盘扩展还在不在，丢了只把 `/System` 里该有的注册回去。不常驻、不碰 GPU。
+- **SIP 开着。** 不重装 Ice / SketchyBar / JankyBorders。
+
+完整键位见 [`docs/omacosy-键位设置.html`](docs/omacosy-键位设置.html)。
+
+---
+
 omakase + macOS + cosy. An [omarchy](https://omarchy.org)-style setup
 for macOS: tiling window management with a real Super key and
 Hyprland's dwindle layout, a status bar built for it (bar, popups,
@@ -130,8 +147,9 @@ each rebuild as a new app and you re-grant after every install.
 
 ## App choices
 
-Keybindings launch apps defined in `config/apps.conf`. Defaults are
-Ghostty, Safari, Spotify, Slack (terminal, browser, music, messenger).
+Keybindings launch apps defined in `config/apps.conf`. Defaults in this
+fork are Ghostty, Google Chrome, NeteaseMusic, ChatGPT (terminal,
+browser, music, messenger).
 Override any of them in `config/apps.local.conf` (gitignored), then
 re-run `install.sh`:
 
@@ -149,7 +167,7 @@ Your personal shell config belongs in `~/.zshrc.local`; the repo's
 | Piece | Tool | Config |
 |---|---|---|
 | Tiling WM | [AeroSpace](https://github.com/nikitabobko/AeroSpace) *or* [OmniWM](https://github.com/BarutSRB/OmniWM) via `omacosy-wm-switch` | `config/aerospace/aerospace.template.toml`, `config/omniwm/settings.toml` |
-| Super key | [Karabiner](https://karabiner-elements.pqrs.org) (Caps Lock → cmd+ctrl+alt) | `config/karabiner/` (copied, not symlinked — TCC) |
+| Super key | This fork: Option（⌥）. Upstream default: [Karabiner](https://karabiner-elements.pqrs.org) Caps Lock → cmd+ctrl+alt | `config/karabiner/` (copied, not symlinked — TCC) |
 | Status bar, popups, shade | `omacosy-bar` (self-compiled launchd agent, one process draws all of it) | `helper/bar.swift` |
 | Window borders + fullscreen shroud | `omacosy-borders` (self-compiled launchd agent) | `helper/borders.swift`, `config/borders.conf` |
 | Focus follows mouse | `omacosy-ffm` (self-compiled launchd agent; parked under OmniWM, whose native ffm takes over) | `helper/ffm.swift`, `config/ffm-ignore` |
@@ -291,7 +309,7 @@ startup and does no config-file or image-file I/O while it draws.
 - **Floats**: appears only while the workspace holds floating windows;
   click surfaces the next one.
 
-## Keybindings — Super = hold Caps Lock
+## Keybindings — this fork: Super = Option（⌥）
 
 Karabiner remaps Caps Lock to `cmd+ctrl+alt` (a combo macOS never
 uses), so omarchy's scheme works letter-for-letter without breaking
@@ -323,7 +341,7 @@ typing or app shortcuts. Caps Lock tapped alone is Escape.
 | `Super+shift+;` | service mode (`esc` reload, `r` flatten, `⌫` close others) |
 | **Apps and system** | |
 | `Super+enter` / `Super+shift+enter` | terminal / browser |
-| `Super+space` | launcher (Raycast; the OmniWM option opens OmniWM's command palette instead) |
+| `Super+space` | launcher — this fork: Spotlight. Upstream: Raycast (OmniWM option: its command palette) |
 | `Super+shift+f` / `+m` / `+g` | files / music / messenger (set in `apps.conf`) |
 | `Super+shift+t` | next theme |
 | `Super+shift+b` | next wallpaper of the current theme |

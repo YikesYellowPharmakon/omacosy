@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Re-register Apple's Settings + iCloud Drive plugins if pkd dropped them.
+# Does not flip iCloud account toggles. Only pluginkit -a on /System appexes.
+set -euo pipefail
+
+LOG="${TMPDIR:-/tmp}/omacosy-pkd-guard.log"
+EXTKIT="/System/Library/ExtensionKit/Extensions"
+CLOUDDOCS="/System/Library/PrivateFrameworks/CloudDocs.framework/PlugIns"
+
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG"; }
+
+listed() {
+  /usr/bin/pluginkit -m 2>/dev/null | /usr/bin/grep -q "$1"
+}
+
+need_settings=0
+need_drive=0
+listed "com.apple.systempreferences.AppleIDSettings" || need_settings=1
+listed "com.apple.CloudDocs.iCloudDriveFileProvider" || need_drive=1
+
+if [ "$need_settings" -eq 0 ] && [ "$need_drive" -eq 0 ]; then
+  exit 0
+fi
+
+add_settings() {
+  local e pt
+  for e in "$EXTKIT"/*.appex; do
+    [ -d "$e" ] || continue
+    pt="$(/usr/bin/plutil -extract EXAppExtensionAttributes.EXExtensionPointIdentifier raw -o - "$e/Contents/Info.plist" 2>/dev/null || true)"
+    [ -n "$pt" ] || pt="$(/usr/bin/plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - "$e/Contents/Info.plist" 2>/dev/null || true)"
+    if [ "$pt" = "com.apple.Settings.extension.ui" ]; then
+      /usr/bin/pluginkit -a "$e" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+add_drive() {
+  local e
+  for e in "$CLOUDDOCS"/*.appex; do
+    [ -d "$e" ] || continue
+    /usr/bin/pluginkit -a "$e" >/dev/null 2>&1 || true
+  done
+}
+
+[ "$need_settings" -eq 1 ] && add_settings && log "repaired Settings.extension.ui"
+[ "$need_drive" -eq 1 ] && add_drive && log "repaired iCloud Drive File Provider"
+exit 0

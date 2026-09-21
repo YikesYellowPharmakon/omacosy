@@ -178,6 +178,9 @@ alt-shift-g = 'exec-and-forget open -a "@MESSENGER@"'
 # Lock (omarchy: Super+Ctrl+L)
 ctrl-alt-l = 'exec-and-forget $HOME/.local/bin/omacosy-helper lock'
 
+# Keybinding cheatsheet (omarchy: Super+K)
+alt-k = 'exec-and-forget /usr/bin/touch /tmp/omacosy-bar-cheatsheet'
+
 # Theme / wallpaper
 alt-shift-t = 'exec-and-forget $HOME/.local/bin/theme-next'
 alt-shift-b = 'exec-and-forget $HOME/.local/bin/theme-bg-next'

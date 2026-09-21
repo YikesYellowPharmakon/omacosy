@@ -32,6 +32,8 @@ launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" 2>/dev/null 
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" "$HOME/.local/bin/omacosy-bar"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.tray.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.tray.plist" "$HOME/.local/bin/omacosy-tray"
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.pkd-guard.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.omacosy.pkd-guard.plist" "$HOME/.local/bin/omacosy-pkd-guard"
 rm -f "$HOME/.local/state/omacosy/tray-cmd"
 rm -rf "$HOME/.local/share/omacosy/omacosy-bar.app"
 # overview is self-daemonizing (no launchd agent) — kill by pidfile

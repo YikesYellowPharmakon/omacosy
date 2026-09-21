@@ -2331,21 +2331,49 @@ func karabinerExecCheatEntries() -> [CheatEntry] {
     return entries
 }
 
-let cheatColumns = 3
 let cheatRowH: CGFloat = 20
 let cheatPad: CGFloat = 18
+let cheatColGap: CGFloat = 28
+
+func cheatMaxBox(on screen: NSScreen) -> NSSize {
+    let vis = screen.visibleFrame
+    return NSSize(width: max(320, vis.width - 40), height: max(160, vis.height - 40))
+}
+
+func cheatClampFrame(_ size: NSSize, on screen: NSScreen) -> NSRect {
+    let vis = screen.visibleFrame
+    let box = cheatMaxBox(on: screen)
+    let w = min(size.width, box.width)
+    let h = min(size.height, box.height)
+    var x = vis.midX - w / 2
+    var y = vis.midY - h / 2
+    x = min(max(x, vis.minX + 20), vis.maxX - 20 - w)
+    y = min(max(y, vis.minY + 20), vis.maxY - 20 - h)
+    return NSRect(x: x, y: y, width: w, height: h)
+}
+
+func truncateText(_ s: String, _ font: NSFont, width: CGFloat) -> String {
+    if width <= 8 || advance(s, font) <= width { return s }
+    var t = s
+    while t.count > 1, advance(t + "…", font) > width { t.removeLast() }
+    return t + "…"
+}
 
 // the sheet takes key focus while open (the overview's pattern) so it
 // can be typed into; hideCheatsheet hands focus back to the app that
 // had it, so the search never costs the user their window
 final class CheatWindow: NSWindow {
-    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        cheatClampFrame(frameRect.size, on: screen ?? self.screen ?? NSScreen.main ?? NSScreen.screens[0])
+    }
     override var canBecomeKey: Bool { true }
 }
 
 final class CheatsheetView: NSView {
     var entries: [CheatEntry] = []
     var filter = ""
+    var columnCount = 2
+    var maxColumnTotal: CGFloat = 0
     private var keyFont: NSFont { nerdFont("Bold", 12) }
     private var actFont: NSFont { nerdFont("Regular", 12) }
     private var headFont: NSFont { nerdFont("Bold", 13) }
@@ -2377,7 +2405,8 @@ final class CheatsheetView: NSView {
     private func columns() -> [[(String?, CheatEntry?)]] {
         let all = rows()
         guard !all.isEmpty else { return [] }
-        let per = Int((Double(all.count) / Double(cheatColumns)).rounded(.up))
+        let n = max(1, columnCount)
+        let per = Int((Double(all.count) / Double(n)).rounded(.up))
         return stride(from: 0, to: all.count, by: per).map {
             Array(all[$0..<min($0 + per, all.count)])
         }
@@ -2393,15 +2422,34 @@ final class CheatsheetView: NSView {
                     a = max(a, advance(e.action, actFont))
                 }
             }
-            return (k, k + 14 + a)
+            var total = k + 14 + a
+            if maxColumnTotal > 0, total > maxColumnTotal {
+                total = maxColumnTotal
+                k = min(k, max(80, maxColumnTotal * 0.38))
+            }
+            return (k, total)
         }
+    }
+
+    func fit(on screen: NSScreen) {
+        let box = cheatMaxBox(on: screen)
+        columnCount = box.width >= 1600 ? 3 : (box.width >= 860 ? 2 : 1)
+        let gaps = CGFloat(max(0, columnCount - 1)) * cheatColGap
+        maxColumnTotal = (box.width - cheatPad * 2 - gaps) / CGFloat(columnCount)
+        var size = measure()
+        if size.width > box.width, columnCount > 1 {
+            columnCount = 1
+            maxColumnTotal = box.width - cheatPad * 2
+            size = measure()
+        }
+        _ = size
     }
 
     func measure() -> NSSize {
         let cols = columns()
         guard !cols.isEmpty else { return NSSize(width: 320, height: 80) }
         let widths = columnWidths()
-        let w = widths.reduce(0) { $0 + $1.total } + CGFloat(cols.count - 1) * 28
+        let w = widths.reduce(0) { $0 + $1.total } + CGFloat(max(0, cols.count - 1)) * cheatColGap
         let tallest = cols.map(\.count).max() ?? 0
         return NSSize(width: w + cheatPad * 2,
                       height: CGFloat(tallest) * cheatRowH + cheatPad * 2 + 26)
@@ -2417,9 +2465,10 @@ final class CheatsheetView: NSView {
         body.stroke()
 
         let title = filter.isEmpty
-            ? "键位说明 — Super 是 Option（⌥） · 打字搜索 · 再点「键位」/⌥K/Esc 关闭"
-            : "搜索: \(filter)▏ — \(visibleEntries().count) 条 · Esc 清空"
-        drawText(title, nerdFont("Bold", 12), palette.accent.withAlphaComponent(0.8),
+            ? "Super = Option  ·  type to search  ·  Esc / ⌥K closes"
+            : "search: \(filter)▏ — \(visibleEntries().count)  ·  Esc clears"
+        drawText(truncateText(title, nerdFont("Bold", 12), width: bounds.width - cheatPad * 2),
+                 nerdFont("Bold", 12), palette.accent.withAlphaComponent(0.8),
                  leftAt: cheatPad, midY: bounds.maxY - cheatPad - 6)
 
         var x = cheatPad
@@ -2428,15 +2477,19 @@ final class CheatsheetView: NSView {
             var y = bounds.maxY - cheatPad - 30
             for (head, e) in col {
                 if let head {
-                    drawText(head, headFont, palette.accent, leftAt: x, midY: y - cheatRowH / 2)
+                    drawText(truncateText(head, headFont, width: width.total),
+                             headFont, palette.accent, leftAt: x, midY: y - cheatRowH / 2)
                 } else if let e {
-                    drawText(e.key, keyFont, palette.label, leftAt: x, midY: y - cheatRowH / 2)
-                    drawText(e.action, actFont, palette.muted,
+                    drawText(truncateText(e.key, keyFont, width: width.key),
+                             keyFont, palette.label, leftAt: x, midY: y - cheatRowH / 2)
+                    let actW = max(0, width.total - width.key - 14)
+                    drawText(truncateText(e.action, actFont, width: actW),
+                             actFont, palette.muted,
                              leftAt: x + width.key + 14, midY: y - cheatRowH / 2)
                 }
                 y -= cheatRowH
             }
-            x += width.total + 28
+            x += width.total + cheatColGap
         }
     }
 
@@ -2462,14 +2515,13 @@ final class CheatsheetView: NSView {
         }
     }
 
-    // the sheet shrinks to its matches — re-measure and keep the centre
     private func refit() {
         guard let window = window else { needsDisplay = true; return }
+        let screen = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
+        fit(on: screen)
         let size = measure()
-        let c = NSPoint(x: window.frame.midX, y: window.frame.midY)
         frame = NSRect(origin: .zero, size: size)
-        window.setFrame(NSRect(x: c.x - size.width / 2, y: c.y - size.height / 2,
-                               width: size.width, height: size.height), display: true)
+        window.setFrame(cheatClampFrame(size, on: screen), display: true)
         needsDisplay = true
     }
 }
@@ -2483,6 +2535,7 @@ func hideCheatsheet() {
     // hand focus back to whoever had it before the sheet took key
     cheatPrevApp?.activate()
     cheatPrevApp = nil
+    repaint()
 }
 
 func keysGuideURL() -> URL? {
@@ -2550,25 +2603,23 @@ func toggleCheatsheet() {
     view.entries = entries
     let mouse = NSEvent.mouseLocation
     let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main!
+    view.fit(on: screen)
     let measured = view.measure()
-    let maxH = screen.visibleFrame.height - 36
-    let winH = min(measured.height, maxH)
+    let frame = cheatClampFrame(measured, on: screen)
     view.frame = NSRect(origin: .zero, size: measured)
     let window = CheatWindow(
-        contentRect: NSRect(x: screen.visibleFrame.midX - measured.width / 2,
-                            y: screen.visibleFrame.midY - winH / 2,
-                            width: measured.width, height: winH),
+        contentRect: frame,
         styleMask: .borderless, backing: .buffered, defer: false)
     window.isOpaque = false
     window.backgroundColor = .clear
     window.hasShadow = true
     window.level = .popUpMenu
     window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-    if measured.height > maxH {
-        let scroll = NSScrollView(frame: NSRect(origin: .zero,
-                                                size: NSSize(width: measured.width, height: winH)))
+    if measured.height > frame.height || measured.width > frame.width {
+        let scroll = NSScrollView(frame: NSRect(origin: .zero, size: frame.size))
         scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
+        scroll.hasVerticalScroller = measured.height > frame.height
+        scroll.hasHorizontalScroller = false
         scroll.documentView = view
         window.contentView = scroll
     } else {
@@ -2579,6 +2630,7 @@ func toggleCheatsheet() {
     window.makeKeyAndOrderFront(nil)
     window.makeFirstResponder(view)
     cheatWindow = window
+    repaint()
     tlog("cheatsheet: \(entries.count) rows from keys html")
 }
 
@@ -2678,6 +2730,7 @@ final class BarView: NSView {
     var itemRects: [(String, NSRect)] = []
     var mediaRects: [(String, NSRect)] = []
     var appleRect: NSRect = .zero
+    var keysRect: NSRect = .zero
 
     override var isFlipped: Bool { false }
 
@@ -2773,8 +2826,19 @@ final class BarView: NSView {
         drawIcon(appleGlyph, appleFont, palette.accent, centeredIn: apple)
         appleRect = NSRect(x: apple.minX, y: 0, width: appleW, height: barHeight)
 
+        let keysGlyph = "\u{f11c}"
+        let keysFont = nerdFont("Bold", 15)
+        let keysW = inkBox(keysGlyph, keysFont).width + 20
+        let keys = NSRect(x: apple.maxX + 10, y: (barHeight - pillHeight) / 2,
+                          width: keysW, height: pillHeight)
+        let keysOpen = cheatWindow != nil
+        (keysOpen ? palette.accent : palette.itemBG).setFill()
+        NSBezierPath(roundedRect: keys, xRadius: radius, yRadius: radius).fill()
+        drawIcon(keysGlyph, keysFont, keysOpen ? palette.barBG : palette.accent, centeredIn: keys)
+        keysRect = NSRect(x: keys.minX, y: 0, width: keysW, height: barHeight)
+
         let bracketW = CGFloat(shown.count) * (chipBox + chipPad * 2)
-        let bracket = NSRect(x: apple.maxX + 10, y: (barHeight - pillHeight) / 2,
+        let bracket = NSRect(x: keys.maxX + 10, y: (barHeight - pillHeight) / 2,
                              width: bracketW, height: pillHeight)
         palette.itemBG.setFill()
         NSBezierPath(roundedRect: bracket, xRadius: radius, yRadius: radius).fill()
@@ -2879,6 +2943,11 @@ final class BarView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if keysRect.contains(p) {
+            closePopup()
+            toggleCheatsheet()
+            return
+        }
         if appleRect.contains(p), let surface {
             appMenuStack.removeAll()
             NSWorkspace.shared.runningApplications
@@ -3378,6 +3447,11 @@ let movedPath = "/tmp/omacosy-bar-moved"
 watch(movedPath, create: true) {
     tlog("moved poke")
     kickRebuild()
+}
+
+let cheatPath = "/tmp/omacosy-bar-cheatsheet"
+watch(cheatPath, create: true) {
+    toggleCheatsheet()
 }
 
 let wsPath = "/tmp/omacosy-bar-ws"
