@@ -16,7 +16,7 @@
 				<key>background</key>
 				<string>#131610</string>
 				<key>caret</key>
-				<string>#557c39</string>
+				<string>#517a39</string>
 				<key>foreground</key>
 				<string>#93B298</string>
 				<key>invisibles</key>
@@ -24,7 +24,7 @@
 				<key>lineHighlight</key>
 				<string>#1B2117</string>
 				<key>selection</key>
-				<string>#668b42</string>
+				<string>#6a8e45</string>
 			</dict>
 		</dict>
 		<dict>

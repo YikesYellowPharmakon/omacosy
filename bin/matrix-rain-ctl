@@ -64,7 +64,6 @@ set_matrix_saver() {
     path "$SAVER" \
     type -int 0 >/dev/null 2>&1 || true
   defaults -currentHost write com.apple.screensaver idleTime -int 180 >/dev/null 2>&1 || true
-  /usr/bin/osascript >/dev/null 2>&1 -e 'tell application "System Events" to set current screen saver to screen saver "OmacosyRain"' || true
 }
 
 cmd="${1:-status}"

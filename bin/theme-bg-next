@@ -32,10 +32,9 @@ on run argv
 end run
 APPLESCRIPT
   fi
-  THEME_DIR="$(readlink "$CURRENT_THEME" 2>/dev/null || true)"
-  if [ -n "$THEME_DIR" ] && [ -x "$HOME/.local/share/omacosy/bin/theme-pack.py" ]; then
-    python3 "$HOME/.local/share/omacosy/bin/theme-pack.py" apply-wallpaper "$THEME_DIR" "$1" >/dev/null 2>&1 || true
-  fi
+  # Do not call apply-wallpaper here. That path seals the lock image and
+  # restarts WallpaperAgent, which reloads the stale Desktop entry from
+  # Index.plist (still The Office) and undoes the cycle.
 }
 
 if [ $# -gt 0 ]; then

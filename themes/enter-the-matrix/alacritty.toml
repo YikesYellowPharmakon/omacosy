@@ -4,7 +4,7 @@ foreground = "#93B298"
 [colors.cursor]
 cursor = "#A8C6AE"
 [colors.selection]
-background = "#668b42"
+background = "#6a8e45"
 text = "#0E150F"
 [colors.normal]
 black = "#0B0E09"

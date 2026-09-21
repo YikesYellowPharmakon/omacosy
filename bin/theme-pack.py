@@ -12,7 +12,6 @@ import shutil
 import struct
 import subprocess
 import sys
-import time
 import zlib
 from pathlib import Path
 
@@ -54,6 +53,11 @@ PRESETS = {
     5: (175, 82, 222),
     6: (255, 45, 85),
 }
+
+# These themes' own accents are gray-blue or cyan. The candidate bar
+# paints AppleHighlightColor, so the raw accent reads as gray. Pin the
+# input highlight to system blue; borders still use the theme accent.
+IME_BLUE_THEMES = {"azure", "monokai-dark"}
 
 
 def parse_colors(path: Path) -> dict[str, str]:
@@ -1056,31 +1060,67 @@ def seal_lock(lock_image: Path, surfaces: tuple[str, ...] = ("Idle",)) -> None:
         pass
 
 
-def set_desktop_then_lock(desktop: Path, lock_image: Path) -> None:
+def desktop_already(desktop: Path) -> bool:
     helper = Path.home() / ".local/bin/omacosy-helper"
-    if helper.is_file() and desktop.is_file():
-        subprocess.run([str(helper), "wallpaper", str(desktop)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    seal_lock(lock_image)
-    subprocess.run(["killall", "WallpaperAgent"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(0.4)
-    seal_lock(lock_image)
+    if not helper.is_file():
+        return False
+    out = subprocess.run(
+        [str(helper), "wallpaper", "get"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    lines = [ln.strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
+    if not lines:
+        return False
+    try:
+        target = desktop.resolve()
+    except OSError:
+        return False
+    for ln in lines:
+        try:
+            if Path(ln).resolve() != target:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def set_desktop_image(desktop: Path) -> None:
+    """Swap the picture in place.
+
+    Do not rewrite Index.plist and do not kill WallpaperAgent. On macOS 27
+    that restart paints the built-in Golden Gate desktop until the agent
+    reads the store again, and writing the store from this process raises
+    a file-access prompt on every theme switch.
+    """
+    if not desktop.is_file() or desktop_already(desktop):
+        return
+    helper = Path.home() / ".local/bin/omacosy-helper"
+    if helper.is_file():
+        subprocess.run(
+            [str(helper), "wallpaper", str(desktop)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+
+def set_desktop_then_lock(desktop: Path, lock_image: Path) -> None:
+    # lock_image is unused on the live path. Sealing Idle and restarting
+    # WallpaperAgent is what flashed Golden Gate and prompted for access.
+    del lock_image
+    set_desktop_image(desktop)
 
 
 def apply_lock_and_saver(theme_dir: Path, wallpaper: Path | None = None, colors: dict[str, str] | None = None) -> None:
+    del colors
     walls = real_backgrounds(theme_dir)
-    lock_image = resolve_lock(theme_dir, colors)
-    if not walls:
-        return
-    desktop = wallpaper if wallpaper and wallpaper.is_file() else walls[0]
-    if is_lock_art(desktop) or desktop.name.lower() in {"lock.png", "lock-ui.png"}:
-        desktop = walls[0]
-    if lock_image is None:
-        lock_image = generate_lock_ui(theme_dir, colors) if colors else None
-        if lock_image is None:
-            lock_image = next((p for p in walls if p.resolve() != desktop.resolve()), walls[0] if walls else None)
-    if lock_image is None:
-        return
-    set_desktop_then_lock(desktop, lock_image)
+    desktop = wallpaper if wallpaper and wallpaper.is_file() else (walls[0] if walls else None)
+    if desktop and (is_lock_art(desktop) or desktop.name.lower() in {"lock.png", "lock-ui.png"}):
+        desktop = walls[0] if walls else None
+    if desktop:
+        set_desktop_image(desktop)
     # Ghostty + ttfx is the screensaver for every theme. Theme switches
     # must not revive the system .saver or Ken Burns idle timer.
     subprocess.run(
@@ -1147,10 +1187,177 @@ def defaults_write(domain: str, key: str, typ: str, value: str) -> None:
     subprocess.run(["defaults", "write", domain, key, f"-{typ}", value], check=False)
 
 
+def read_default(domain: str, key: str) -> str | None:
+    out = subprocess.run(
+        ["/usr/bin/defaults", "read", domain, key],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        return None
+    text = (out.stdout or "").strip()
+    return text or None
+
+
+def sync_global_preferences() -> None:
+    """Flush NSGlobalDomain before any process is told to re-read it.
+
+    A notification that lands first makes AppKit cache the previous accent.
+    Killing cfprefsd to force a re-read is what used to race that cache
+    and take down clients mid-lookup.
+    """
+    try:
+        from CoreFoundation import CFPreferencesAppSynchronize, kCFPreferencesAnyApplication
+
+        CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
+    except Exception:
+        pass
+
+
+# CoreUI repaints traffic lights only after BOTH of these, variant first.
+CHROME_COLOR_NOTIFY = (
+    "AppleAquaColorVariantChanged",
+    "AppleColorPreferencesChangedNotification",
+)
+
+
+def post_chrome_notifications(*, appearance: bool = False) -> None:
+    """Tell running AppKit apps the accent, highlight, and traffic lights changed.
+
+    System Settings posts the distributed notifications. notifyutil is a
+    separate channel and does not reach CoreUI, so it is not used here.
+    No AppleScript: controlling System Events prompts on every switch
+    when the sender is a shell launched from AeroSpace.
+    """
+    names = list(CHROME_COLOR_NOTIFY)
+    if appearance:
+        names.append("AppleInterfaceThemeChangedNotification")
+    try:
+        from Foundation import NSDistributedNotificationCenter
+
+        dnc = NSDistributedNotificationCenter.defaultCenter()
+        for name in names:
+            dnc.postNotificationName_object_userInfo_deliverImmediately_(name, None, None, True)
+    except Exception:
+        pass
+    try:
+        from CoreFoundation import (
+            CFNotificationCenterGetDistributedCenter,
+            CFNotificationCenterPostNotification,
+        )
+
+        center = CFNotificationCenterGetDistributedCenter()
+        for name in names:
+            CFNotificationCenterPostNotification(center, name, None, None, True)
+    except Exception:
+        pass
+
+
+def _appkit():
+    import ctypes
+
+    import AppKit
+
+    AppKit.NSApplication.sharedApplication()
+    return ctypes.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
+
+
+def publish_user_accent(accent: int) -> None:
+    """Store the accent and tell every open window.
+
+    The second argument is the notify flag. Without it AppKit writes the
+    accent and leaves traffic lights and the input method on the old color.
+    """
+    try:
+        import ctypes
+
+        appkit = _appkit()
+        setter = appkit.NSColorSetUserAccentColor
+        setter.restype = ctypes.c_bool
+        # The second argument is a register-width flag. A ctypes bool can
+        # arrive as zero, which stores the accent and skips the broadcast.
+        setter.argtypes = [ctypes.c_int64, ctypes.c_int]
+        getter = appkit.NSColorGetUserAccentColor
+        getter.restype = ctypes.c_int64
+        getter.argtypes = []
+        target = int(accent)
+        # An unchanged index returns without notifying, so windows keep the
+        # previous buttons. Step to another accent, then back to the target.
+        if int(getter()) == target:
+            setter(ctypes.c_int64(0 if target != 0 else 4), 1)
+        setter(ctypes.c_int64(target), 1)
+    except Exception:
+        pass
+
+
+def publish_user_highlight(hex_color: str) -> None:
+    """Push the candidate-bar color the way the Appearance pane does.
+
+    Key -2 is the custom highlight. The third argument notifies the input
+    method; without it the new RGB stays on disk and the bar keeps the
+    previous color.
+    """
+    try:
+        import ctypes
+
+        from AppKit import NSColor
+
+        appkit = _appkit()
+        r, g, b = hex_to_rgb(hex_color)
+        color = NSColor.colorWithSRGBRed_green_blue_alpha_(r / 255, g / 255, b / 255, 1.0)
+        setter = appkit.NSColorSetUserHighlightColor
+        setter.restype = ctypes.c_bool
+        setter.argtypes = [ctypes.c_int64, ctypes.c_void_p, ctypes.c_int]
+        setter(ctypes.c_int64(-2), color.__c_void_p__(), 1)
+    except Exception:
+        pass
+
+
+def flush_distributed_notifications() -> None:
+    """Let the accent broadcast leave this process.
+
+    NSColorSetUserAccentColor posts with the two-argument method, which
+    waits for a run-loop turn. The theme switch exits immediately, so
+    without this turn the open windows never hear the new color.
+    """
+    try:
+        from Foundation import NSDate, NSRunLoop
+
+        NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.4))
+    except Exception:
+        pass
+
+
+def refresh_cached_chrome() -> None:
+    """Reload the input candidate window.
+
+    That window ignores a normal terminate and keeps the highlight it
+    read at login. SIGKILL lets launchd start a new one, which reads the
+    color just written. TextInputSwitcher stays up so the keyboard does
+    not wedge. Dock and SystemUIServer stay up too: restarting them races
+    omacosy-menubar-hide and can wedge WindowServer.
+    """
+    subprocess.run(
+        ["/usr/bin/killall", "Finder"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for proc in ("SCIM_Extension", "CursorUIViewService"):
+        subprocess.run(
+            ["/usr/bin/killall", "-9", proc],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+
 def apply_macos(colors: dict[str, str]) -> None:
     accent = colors["accent"]
     apple = colors.get("_apple_accent") or str(nearest_apple_accent(accent))
-    r, g, b = hex_to_rgb(accent)
+    highlight_hex = colors.get("_ime_highlight") or accent
+    r, g, b = hex_to_rgb(highlight_hex)
     highlight = f"{r / 255:.6f} {g / 255:.6f} {b / 255:.6f} Other"
     wall_light = colors.get("_wallpaper_light")
     if wall_light == "1":
@@ -1159,32 +1366,24 @@ def apply_macos(colors: dict[str, str]) -> None:
         dark = True
     else:
         dark = luminance(colors["background"]) < 0.55
+    appearance_changed = False
     if dark:
+        if read_default("-g", "AppleInterfaceStyle") != "Dark":
+            defaults_write("-g", "AppleInterfaceStyle", "string", "Dark")
+            appearance_changed = True
+    elif read_default("-g", "AppleInterfaceStyle") is not None:
         subprocess.run(
-            ["/usr/bin/osascript", "-e", 'tell application "System Events" to tell appearance preferences to set dark mode to true'],
+            ["defaults", "delete", "-g", "AppleInterfaceStyle"],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        defaults_write("-g", "AppleInterfaceStyle", "string", "Dark")
-    else:
-        subprocess.run(
-            ["/usr/bin/osascript", "-e", 'tell application "System Events" to tell appearance preferences to set dark mode to false'],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        subprocess.run(["defaults", "delete", "-g", "AppleInterfaceStyle"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        appearance_changed = True
     defaults_write("-g", "AppleAccentColor", "int", apple)
-    defaults_write("-g", "AppleHighlightColor", "string", highlight)
     defaults_write("-g", "AppleAquaColorVariant", "int", "6" if apple == "-1" else "1")
-    defaults_write("-g", "AppleReduceDesktopTinting", "bool", "false")
-    defaults_write("NSGlobalDomain", "AppleReduceDesktopTinting", "bool", "false")
-    defaults_write("com.apple.finder", "ShowPathbar", "bool", "true")
-    defaults_write("com.apple.finder", "ShowStatusBar", "bool", "false")
-    defaults_write("com.apple.finder", "FXPreferredViewStyle", "string", "Nlsv")
-    defaults_write("com.apple.finder", "_FXSortFoldersFirst", "bool", "true")
-    defaults_write("com.apple.WindowManager", "EnableStandardClickToShowDesktop", "bool", "false")
+    defaults_write("-g", "AppleHighlightColor", "string", highlight)
+    publish_user_accent(int(apple))
+    publish_user_highlight(highlight_hex)
     replace_file(Path.home() / ".config/starship.toml", render_starship(colors))
     ghostty_user = Path.home() / ".config/ghostty/config"
     if ghostty_user.is_file():
@@ -1192,41 +1391,12 @@ def apply_macos(colors: dict[str, str]) -> None:
     ghostty = Path("/Applications/Ghostty.app/Contents/MacOS/ghostty")
     if ghostty.is_file():
         subprocess.run([str(ghostty), "+reload-config"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    broadcast_chrome()
-    # Do not kill Finder / Dock / SystemUIServer. Those restarts race
-    # omacosy-menubar-hide's SkyLight calls and can wedge WindowServer
-    # so the session only comes back after a reboot. Appearance updates
-    # go out through the distributed notifications above.
-
-
-def broadcast_chrome() -> None:
-    """Push accent/highlight to IME candidate UI and notification banners.
-
-    defaults write alone is not enough: SCIM / CursorUIViewService cache
-    the last system colors until they hear the distributed notification
-    or are relaunched.
-    """
-    try:
-        from Foundation import NSDistributedNotificationCenter  # type: ignore
-
-        dnc = NSDistributedNotificationCenter.defaultCenter()
-        for name in (
-            "AppleColorPreferencesChangedNotification",
-            "AppleAquaColorVariantChanged",
-            "AppleInterfaceThemeChangedNotification",
-        ):
-            dnc.postNotificationName_object_userInfo_deliverImmediately_(name, None, None, True)
-    except Exception:
-        pass
-    for proc in (
-        "CursorUIViewService",
-        "SCIM_Extension",
-        "SCIM",
-        "TextInputMenuAgent",
-        "NotificationCenter",
-        "UserNotificationCenter",
-    ):
-        subprocess.run(["killall", proc], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sync_global_preferences()
+    post_chrome_notifications(appearance=appearance_changed)
+    flush_distributed_notifications()
+    refresh_cached_chrome()
+    post_chrome_notifications(appearance=False)
+    flush_distributed_notifications()
 
 
 def write_iterm(colors: dict[str, str]) -> None:
@@ -1265,6 +1435,9 @@ def apply(theme_dir: Path, wallpaper: Path | None = None, color_mode: str | None
         color_mode = load_color_mode(theme_dir)
     colors = apply_color_mode(base, wallpaper, color_mode)
     write_sidecars(theme_dir, colors)
+    if theme_dir.name in IME_BLUE_THEMES:
+        colors["_apple_accent"] = "4"
+        colors["_ime_highlight"] = APPLE_HEX[4]
     apply_macos(colors)
     write_typora(colors)
     write_textedit(colors)
@@ -1276,6 +1449,9 @@ def apply(theme_dir: Path, wallpaper: Path | None = None, color_mode: str | None
     write_lazygit(colors)
     write_delta(colors)
     apply_lock_and_saver(theme_dir, wallpaper, colors)
+    # Wallpaper is settled. Ask windows to retint without restarting
+    # Finder, Preview, or the wallpaper agent.
+    post_chrome_notifications(appearance=False)
 
 
 def main() -> int:

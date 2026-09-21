@@ -5,12 +5,12 @@ add_newline = false
 
 [username]
 show_always = true
-style_user = "bg:#557c39 fg:#f5f5f5"
-style_root = "bg:#557c39 fg:#f5f5f5"
+style_user = "bg:#517a39 fg:#f5f5f5"
+style_root = "bg:#517a39 fg:#f5f5f5"
 format = "[ $user ]($style)"
 
 [directory]
-style = "bg:#588476 fg:#f5f5f5"
+style = "bg:#568376 fg:#f5f5f5"
 format = "[ $path ]($style)"
 truncation_length = 3
 truncation_symbol = ".../"
@@ -30,5 +30,5 @@ style = "bg:#33482F fg:#93B298"
 format = "[ $time ]($style) "
 
 [character]
-success_symbol = "[>](fg:#557c39 bold)"
+success_symbol = "[>](fg:#517a39 bold)"
 error_symbol = "[>](fg:#E5484D bold)"

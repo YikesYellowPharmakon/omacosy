@@ -171,7 +171,7 @@ def pick_wallpaper(name: str) -> Path | None:
                 for key, value in lookup.items()
                 if isinstance(value, Path) and remembered and value.resolve() == remembered.resolve()
             ),
-            next((lab for lab in labels if "office-crt" in lab), labels[-1] if labels else "下一张"),
+            next((lab for lab in labels if "the-office" in lab or "office-crt" in lab), labels[-1] if labels else "下一张"),
         )
         picked = choose(f"{name}：选择壁纸（{len(items)} 张静态 + 动态雨）", labels, default)
         if not picked:

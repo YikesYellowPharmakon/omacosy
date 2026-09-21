@@ -59,7 +59,10 @@ resolve_wall() {
     fi
   fi
   if [ "$NAME" = "enter-the-matrix" ] && [ -z "$hint" ]; then
-    if [ -f "$THEMES_DIR/$NAME/backgrounds/06-office-crt.jpg" ]; then
+    if [ -f "$THEMES_DIR/$NAME/backgrounds/4-the-office.jpg" ]; then
+      echo "$THEMES_DIR/$NAME/backgrounds/4-the-office.jpg"
+      return
+    elif [ -f "$THEMES_DIR/$NAME/backgrounds/06-office-crt.jpg" ]; then
       echo "$THEMES_DIR/$NAME/backgrounds/06-office-crt.jpg"
       return
     fi
@@ -123,7 +126,14 @@ if [ -n "$COLOR_MODE" ]; then
 fi
 
 if [ -x "$REPO_DIR/bin/theme-pack.py" ]; then
-  python3 "$REPO_DIR/bin/theme-pack.py" apply "$THEMES_DIR/$NAME" "${WALL:-}" "${COLOR_MODE:-}" >/dev/null 2>&1 || true
+  # AeroSpace's PATH is only /usr/bin:/bin. /usr/bin/python3 has no
+  # PyObjC, so the accent notification never leaves this process and
+  # open windows keep the previous buttons and input color.
+  THEME_PYTHON="/opt/homebrew/bin/python3"
+  if [ ! -x "$THEME_PYTHON" ]; then
+    THEME_PYTHON="$(command -v python3)"
+  fi
+  "$THEME_PYTHON" "$REPO_DIR/bin/theme-pack.py" apply "$THEMES_DIR/$NAME" "${WALL:-}" "${COLOR_MODE:-}" >/dev/null 2>&1 || true
 fi
 
 if [ -x "$REPO_DIR/bin/matrix-rain-ctl" ]; then

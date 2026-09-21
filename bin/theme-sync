@@ -303,8 +303,8 @@ THEME_PINS = {
     "azure": {"desktop": {"1.png"}, "lock": "1.png"},
     "monokai-dark": {"desktop": {"01. Monokai.png"}, "lock": "01. Monokai.png"},
     "enter-the-matrix": {
-        "desktop": {"06-office-crt.jpg"},
-        "lock": "06-office-crt.jpg",
+        "desktop": {"4-the-office.jpg"},
+        "lock": "4-the-office.jpg",
     },
 }
 
