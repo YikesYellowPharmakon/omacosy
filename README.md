@@ -1,22 +1,21 @@
 # omacosy
 
-> 本仓库是在 [paulsp94/omacosy](https://github.com/paulsp94/omacosy) 之上的个人定制，并参考了 [omarchy](https://omarchy.org)。
 > This is a personal customization of [omacosy](https://github.com/paulsp94/omacosy) by [paulsp94](https://github.com/paulsp94). The original project is inspired by [omarchy](https://omarchy.org). Please star and support the upstream repo.
 
-## 这套 rice 和上游差在哪
+## What this fork changes
 
-在上游「平铺 + 一条顶栏 + 一套主题」之上，这台机器上的版本刻意做成更像日常 Mac，而不是再装一层 Linux 桌面：
+On top of upstream's tiling desktop, this machine is tuned to stay a normal Mac instead of a second Linux shell:
 
-- **Super 是 Option（⌥）**，Command 仍是系统复制粘贴 / 切应用。Caps Lock 留给中文输入法，不经过 Karabiner 改成 Hyper。
-- **启动器是 Spotlight**（⌥ Space）。没有 Raycast。
-- **默认应用**：Ghostty、Chrome、网易云音乐、ChatGPT（`config/apps.conf`；⌥ Shift Enter / M / G）。
-- **主题**：azure、enter-the-matrix、monokai-dark、snow-black。顶栏可点选主题，强调色按主题记住。系统菜单额外项只留 Theme。
-- **屏保**：主屏 Ghostty + ttfx，120fps，一轮内不重复特效；空闲 5 分钟出现，再播 7 分钟熄屏并锁屏。扩展屏不跟播。桌面雨关掉。
-- **键位表**：顶栏左侧一个图标，⌥K 开关，窗口按屏幕宽度收成 3/2/1 列，不会画出屏。
-- **Sequoia 插件自检**：`omacosy-pkd-guard` 开机并每 5 分钟看一眼系统设置 / iCloud 云盘扩展还在不在，丢了只把 `/System` 里该有的注册回去。不常驻、不碰 GPU。
-- **SIP 开着。** 不重装 Ice / SketchyBar / JankyBorders。
+- **Super is Option.** Command still does copy, paste, and app switching. Caps Lock stays Caps Lock for the Chinese IME — it is not remapped to Hyper.
+- **The launcher is Spotlight** (`Option-Space`). Raycast is not installed.
+- **Default apps** in `config/apps.conf`: Ghostty, Google Chrome, NetEase Cloud Music, ChatGPT (`Option-Shift-Return` / `M` / `G`).
+- **Themes:** azure, enter-the-matrix, monokai-dark, snow-black. Pick one from the bar; the last accent color per theme is remembered. The only extra in the Apple menu is Theme.
+- **Screensaver:** Ghostty + ttfx on the main display only, 120 fps, shuffle-bag so an effect does not repeat until every effect in the set has played. Idle 5 minutes to start, 7 more minutes then display-off and lock. No desktop rain. External screens stay dark covers, not a second saver.
+- **Cheatsheet:** icon-only control on the left of the bar, `Option-K` to toggle. The sheet fits the screen (3 / 2 / 1 columns) instead of drawing off the edge.
+- **Sequoia plugin guard:** `omacosy-pkd-guard` runs at login and every 5 minutes. If System Settings panes or the iCloud Drive file provider drop out of pluginkit, it only re-adds the matching `/System` appexes. Not resident, no GPU.
+- **SIP stays on.** Ice, SketchyBar, and JankyBorders are not reinstalled.
 
-完整键位见 [`docs/omacosy-键位设置.html`](docs/omacosy-键位设置.html)。
+Full chord list: [`docs/omacosy-键位设置.html`](docs/omacosy-键位设置.html).
 
 ---
 
@@ -167,7 +166,7 @@ Your personal shell config belongs in `~/.zshrc.local`; the repo's
 | Piece | Tool | Config |
 |---|---|---|
 | Tiling WM | [AeroSpace](https://github.com/nikitabobko/AeroSpace) *or* [OmniWM](https://github.com/BarutSRB/OmniWM) via `omacosy-wm-switch` | `config/aerospace/aerospace.template.toml`, `config/omniwm/settings.toml` |
-| Super key | This fork: Option（⌥）. Upstream default: [Karabiner](https://karabiner-elements.pqrs.org) Caps Lock → cmd+ctrl+alt | `config/karabiner/` (copied, not symlinked — TCC) |
+| Super key | This fork: Option. Upstream default: [Karabiner](https://karabiner-elements.pqrs.org) Caps Lock → cmd+ctrl+alt | `config/karabiner/` (copied, not symlinked — TCC) |
 | Status bar, popups, shade | `omacosy-bar` (self-compiled launchd agent, one process draws all of it) | `helper/bar.swift` |
 | Window borders + fullscreen shroud | `omacosy-borders` (self-compiled launchd agent) | `helper/borders.swift`, `config/borders.conf` |
 | Focus follows mouse | `omacosy-ffm` (self-compiled launchd agent; parked under OmniWM, whose native ffm takes over) | `helper/ffm.swift`, `config/ffm-ignore` |
@@ -309,7 +308,7 @@ startup and does no config-file or image-file I/O while it draws.
 - **Floats**: appears only while the workspace holds floating windows;
   click surfaces the next one.
 
-## Keybindings — this fork: Super = Option（⌥）
+## Keybindings — this fork: Super = Option
 
 Karabiner remaps Caps Lock to `cmd+ctrl+alt` (a combo macOS never
 uses), so omarchy's scheme works letter-for-letter without breaking
