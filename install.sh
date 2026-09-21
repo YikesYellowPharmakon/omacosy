@@ -38,6 +38,19 @@ case "$REPO_DIR" in
   *) LINK_MODE=symlink ;;
 esac
 
+# The window manager this machine runs. A re-run must keep it: starting
+# AeroSpace beside OmniWM leaves two managers tiling the same windows.
+# OmniWM answering its socket covers a running session; the login item,
+# which omacosy-wm-switch moves on a confirmed switch, covers the rest.
+WM=aerospace
+if [ -d /Applications/OmniWM.app ]; then
+  if "$HOME/.local/bin/omacosy-omni" active >/dev/null 2>&1 \
+     || osascript -e 'tell application "System Events" to exists login item "OmniWM"' 2>/dev/null | grep -qx true; then
+    WM=omniwm
+    log "OmniWM is this machine's window manager: keeping it"
+  fi
+fi
+
 # --- 1. Homebrew ------------------------------------------------------------
 if ! command -v brew >/dev/null 2>&1; then
   log "Installing Homebrew"
@@ -305,7 +318,10 @@ cat > "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" <<PLIST
 </plist>
 PLIST
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" 2>/dev/null || true
-launchctl load "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist"
+# OmniWM has its own focus-follows-mouse, and the two fight
+if [ "$WM" = aerospace ]; then
+  launchctl load "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist"
+fi
 
 
 cat > "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" <<PLIST
@@ -392,7 +408,11 @@ fi
 GESTURE_APP="$HOME/.local/share/omacosy/omacosy-gesture.app"
 GESTURE_BIN="$GESTURE_APP/Contents/MacOS/omacosy-gesture"
 mkdir -p "$HOME/.config/omacosy"
-cp "$REPO_DIR/config/gesture/config.json" "$HOME/.config/omacosy/gesture.json"
+if [ "$WM" = omniwm ]; then
+  cp "$REPO_DIR/config/gesture/config.omniwm.json" "$HOME/.config/omacosy/gesture.json"
+else
+  cp "$REPO_DIR/config/gesture/config.json" "$HOME/.config/omacosy/gesture.json"
+fi
 # the aerospace-swipe era: retire its agent, and its clone if it was ours
 if [ -f "$HOME/Library/LaunchAgents/com.acsandmann.swipe.plist" ]; then
   launchctl unload "$HOME/Library/LaunchAgents/com.acsandmann.swipe.plist" 2>/dev/null || true
@@ -472,16 +492,24 @@ fi
 
 
 # OmniWM trial (this branch): installing NEVER switches the window
-# manager — a half-configured switch once stranded the user on one
-# workspace with no way back. AeroSpace starts as always; moving to
-# OmniWM is an explicit, dead-man-guarded step:
+# manager, in either direction — a half-configured switch once stranded
+# the user on one workspace with no way back. Moving between the two is
+# an explicit, dead-man-guarded step:
 #
 #   omacosy-wm-switch omniwm      # snapshot, grant-first, auto-revert
 #   omacosy-wm-switch aerospace   # the way back
-log "Starting AeroSpace (switch to OmniWM with: omacosy-wm-switch omniwm)"
-open -a AeroSpace
-sleep 1
-"$(command -v aerospace || echo /opt/homebrew/bin/aerospace)" reload-config 2>/dev/null || true
+if [ "$WM" = omniwm ]; then
+  log "Keeping OmniWM (back to AeroSpace with: omacosy-wm-switch aerospace)"
+  # karabiner.json was copied from the repo above, which dropped the
+  # rules for the chords that run commands: OmniWM's hotkeys cannot
+  "$HOME/.local/bin/omacosy-karabiner-omniwm" install >/dev/null 2>&1 \
+    || log "WARNING: could not restore the OmniWM chords; run: omacosy-karabiner-omniwm install"
+else
+  log "Starting AeroSpace (switch to OmniWM with: omacosy-wm-switch omniwm)"
+  open -a AeroSpace
+  sleep 1
+  "$(command -v aerospace || echo /opt/homebrew/bin/aerospace)" reload-config 2>/dev/null || true
+fi
 
 # The remapping runs in launchd-managed services; the app itself is only
 # the settings window, and it costs ~92MB resident to leave open. Launch
