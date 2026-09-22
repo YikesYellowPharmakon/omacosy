@@ -370,6 +370,61 @@ cat > "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" <<PLIST
 PLIST
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" 2>/dev/null || true
 launchctl load "$HOME/Library/LaunchAgents/com.omacosy.bar.plist"
+
+# Bottom capsule in the bar's palette. It does not take a gap; the pointer
+# on the screen edge slides it up over the windows. clang, not swiftc:
+# the command-line tools on this machine cannot compile AppKit Swift.
+DOCK_BIN="$HOME/.local/bin/omacosy-dock"
+if [ ! -x "$DOCK_BIN" ] || [ "$REPO_DIR/helper/dock.m" -nt "$DOCK_BIN" ]; then
+  log "Building omacosy-dock"
+  clang -fobjc-arc -O2 -framework Cocoa -framework QuartzCore -framework ApplicationServices \
+    -o "$DOCK_BIN" "$REPO_DIR/helper/dock.m"
+  codesign -f -s - --identifier com.omacosy.dock "$DOCK_BIN" 2>/dev/null || true
+fi
+cat > "$HOME/Library/LaunchAgents/com.omacosy.dock.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.omacosy.dock</string>
+  <key>ProgramArguments</key><array><string>$DOCK_BIN</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>StandardErrorPath</key><string>/tmp/omacosy-dock.err</string>
+</dict>
+</plist>
+PLIST
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.dock.plist" 2>/dev/null || true
+launchctl load "$HOME/Library/LaunchAgents/com.omacosy.dock.plist"
+
+# Chrome fullscreen leaves a toolbar band the bar shows through. The
+# detection lives in bar.swift; this watcher applies it while swiftc
+# cannot rebuild that binary.
+CHROME_BIN="$HOME/.local/bin/omacosy-bar-chrome"
+if [ ! -x "$CHROME_BIN" ] || [ "$REPO_DIR/helper/bar-chrome.m" -nt "$CHROME_BIN" ]; then
+  log "Building omacosy-bar-chrome"
+  clang -fobjc-arc -framework Foundation -framework CoreGraphics \
+    -F /System/Library/PrivateFrameworks -framework SkyLight \
+    -o "$CHROME_BIN" "$REPO_DIR/helper/bar-chrome.m"
+fi
+cat > "$HOME/Library/LaunchAgents/com.omacosy.bar-chrome.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.omacosy.bar-chrome</string>
+  <key>ProgramArguments</key><array><string>$CHROME_BIN</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>/tmp/omacosy-bar-chrome.err</string>
+</dict>
+</plist>
+PLIST
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.bar-chrome.plist" 2>/dev/null || true
+launchctl load "$HOME/Library/LaunchAgents/com.omacosy.bar-chrome.plist"
+
 link "$REPO_DIR/bin/theme-set"  "$HOME/.local/bin/theme-set"
 link "$REPO_DIR/bin/theme-next" "$HOME/.local/bin/theme-next"
 link "$REPO_DIR/bin/theme-pick" "$HOME/.local/bin/theme-pick"

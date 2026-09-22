@@ -57,7 +57,12 @@ PRESETS = {
 # These themes' own accents are gray-blue or cyan. The candidate bar
 # paints AppleHighlightColor, so the raw accent reads as gray. Pin the
 # input highlight to system blue; borders still use the theme accent.
-IME_BLUE_THEMES = {"azure", "monokai-dark"}
+IME_BLUE_THEMES = {"azure"}
+
+# Lock screen still image, written into the wallpaper store's Idle
+# entry only. Other themes keep the system lock (screensaver provider).
+# WallpaperAgent is never killed: restarting it flashes the stale desktop.
+LOCK_IMAGE_THEMES = {"space-monkey"}
 
 
 def parse_colors(path: Path) -> dict[str, str]:
@@ -125,58 +130,246 @@ def replace_file(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def vivid_slots(colors: dict[str, str]) -> list[int]:
+    ink = ansi_palette(colors)
+    return sorted(range(1, 7), key=lambda slot: _hsv_of(ink[slot])[1], reverse=True)
+
+
+def _chromatic_options(colors: dict[str, str]) -> list[str]:
+    found: list[str] = []
+    for key in (
+        "red",
+        "orange",
+        "yellow",
+        "green",
+        "cyan",
+        "blue",
+        "magenta",
+        "color1",
+        "color2",
+        "color3",
+        "color4",
+        "color5",
+        "color6",
+    ):
+        raw = colors.get(key)
+        if not raw:
+            continue
+        _hue, sat, val = _hsv_of(raw)
+        if sat < 0.22 or val < 0.2:
+            continue
+        if any(color_distance(raw, prev) < 28 for prev in found):
+            continue
+        found.append(raw)
+    return found
+
+
+def _closest_hue(
+    options: list[str], target: float, used: list[str], window: float | None = None
+) -> str | None:
+    best: str | None = None
+    best_d = 9.0
+    for color in options:
+        if any(color_distance(color, prev) < 36 for prev in used):
+            continue
+        dist = _hue_dist(_hsv_of(color)[0], target)
+        if window is not None and dist > window:
+            continue
+        if dist < best_d:
+            best, best_d = color, dist
+    return best
+
+
+def ribbon_colors(colors: dict[str, str]) -> dict[str, tuple[str, str]]:
+    """Solid theme colors for one connected powerline ribbon.
+
+    Matrix leads with its green. Other themes lead with their warm color,
+    then yellow, green, and blue — the same run as the Gruvbox ribbon.
+    Fills stay the theme's own hex; they are not mixed into the background.
+    """
+    options = _chromatic_options(colors)
+    face = theme_face(colors)
+    face_h = _hsv_of(face)[0]
+    used: list[str] = []
+    theme = colors.get("_theme_name", "")
+    if theme == "snow-black":
+        # Upstream snow_black leads with its pink, not a gray.
+        user = colors.get("color2") or "#DD9999"
+    elif 0.18 <= face_h <= 0.48:
+        user = face
+    else:
+        user = _closest_hue(options, 0.04, [], window=0.12) or face
+    used.append(user)
+
+    def take(color: str) -> str:
+        if all(color_distance(color, prev) >= 36 for prev in used):
+            used.append(color)
+            return color
+        hue, sat, val = _hsv_of(used[-1])
+        if not _hue_blocked(theme, hue):
+            for delta in (0.18, -0.16, 0.30, -0.26):
+                alt = _from_hsv(hue, min(0.8, max(sat, 0.28)), min(0.92, max(0.34, val + delta)))
+                if all(color_distance(alt, prev) >= 36 for prev in used):
+                    used.append(alt)
+                    return alt
+        used.append(color)
+        return color
+
+    # Matrix stays in its greens. Space Monkey stays warm.
+    # Snow's ribbon stays in blue-green and gray.
+    if theme == "enter-the-matrix":
+        git_hue, lang_hue = 0.28, 0.38
+    elif theme == "space-monkey":
+        git_hue, lang_hue = 0.97, 0.07
+    else:
+        git_hue, lang_hue = 0.33, 0.56
+    if theme == "snow-black":
+        # Rose, teal, then the gray accent. Same slots as colors.toml.
+        directory = colors.get("color3") or user
+        git = colors.get("color1") or directory
+        lang = colors.get("color4") or git
+        used.extend((directory, git, lang))
+    else:
+        directory = take(_closest_hue(options, 0.14, used) or user)
+        git = take(_closest_hue(options, git_hue, used) or directory)
+        lang = take(_closest_hue(options, lang_hue, used) or git)
+
+    bg, fg = colors["background"], colors["foreground"]
+    muted = colors.get("color8") or colors.get("muted") or ""
+    if muted and color_distance(muted, bg) >= 40 and abs(luminance(muted) - luminance(bg)) >= 0.16:
+        extra = muted
+    else:
+        extra = mix_hex(bg, fg, 0.46)
+
+    def pair(body: str) -> tuple[str, str]:
+        return body, text_on(body, colors)
+
+    return {
+        "user": pair(user),
+        "dir": pair(directory),
+        "git": pair(git),
+        "lang": pair(lang),
+        "extra": pair(extra),
+    }
+
+
 def render_starship(colors: dict[str, str]) -> str:
-    """Theme-colored chips. No Nerd/Powerline private-use glyphs — those
-    render as tofu in JetBrainsMonoNL Nerd Font Mono."""
-    accent, muted = colors["accent"], colors["muted"]
-    segs = [
-        accent,
-        mix_hex(accent, colors["color4"], 0.55),
-        colors["color3"],
-        muted,
+    """Connected powerline: apple + user, directory, git, then a new line.
+
+    Arrows sit in the top-level format, so a missing git or node segment
+    collapses into the small chevron at the end instead of a gap. Language
+    and docker text use the theme's own colors and only appear when that
+    tool is actually here. A nested zsh adds a Z on the last segment.
+    """
+    ribbon = ribbon_colors(colors)
+    user, user_fg = ribbon["user"]
+    directory, dir_fg = ribbon["dir"]
+    git, git_fg = ribbon["git"]
+    lang, lang_fg = ribbon["lang"]
+    extra, extra_fg = ribbon["extra"]
+    prompt = colors["foreground"]
+    error = colors.get("red") or colors["color1"]
+    left, arrow = "\ue0b6", "\ue0b0"
+    parts = [
+        f"[{left}](fg:{user})",
+        "$os",
+        "$username",
+        f"[{arrow}](fg:{user} bg:{directory})",
+        "$directory",
+        f"[{arrow}](fg:{directory} bg:{git})",
+        "$git_branch",
+        "$git_status",
+        f"[{arrow}](fg:{git} bg:{lang})",
+        "$nodejs",
+        "$python",
+        "$rust",
+        "$golang",
+        "$ruby",
+        "$php",
+        "$java",
+        "$bun",
+        f"[{arrow}](fg:{lang} bg:{extra})",
+        "$docker_context",
+        "$custom",
+        f"[{arrow}](fg:{extra})",
+        "$line_break$character",
     ]
-    for i in range(1, len(segs)):
-        if color_distance(segs[i], segs[i - 1]) < 28:
-            segs[i] = mix_hex(segs[i], colors["foreground"], 0.38)
-    fgs = [text_on(seg, colors) for seg in segs]
-    s0, s1, s2, s3 = segs
-    t0, t1, t2, t3 = fgs
-    red = colors["color1"]
+    body = "\\\n".join(parts)
+    langs = (
+        ("nodejs", "\ue718"),
+        ("python", "\ue606"),
+        ("rust", "\ue7a8"),
+        ("golang", "\ue627"),
+        ("ruby", "\ue791"),
+        ("php", "\ue608"),
+        ("java", "\ue256"),
+        ("bun", "\ue76f"),
+    )
+    lang_toml = "\n".join(
+        f"[{name}]\n"
+        f'symbol = "{symbol}"\n'
+        f'style = "bg:{lang}"\n'
+        f"format = '[[ $symbol $version ](fg:{lang_fg} bg:{lang})]($style)'\n"
+        for name, symbol in langs
+    )
     return (
         "# generated by theme-pack from the active omacosy theme\n"
-        'format = """$username$directory$git_branch$git_status$time$character"""\n'
+        "format = \"\"\"\n"
+        f"{body}\"\"\"\n"
         "\n"
         "add_newline = false\n"
         "\n"
+        "[os]\n"
+        "disabled = false\n"
+        f'style = "bg:{user} fg:{user_fg}"\n'
+        'format = "[$symbol]($style)"\n'
+        "\n"
+        "[os.symbols]\n"
+        'Macos = "\uf179"\n'
+        "\n"
         "[username]\n"
         "show_always = true\n"
-        f'style_user = "bg:{s0} fg:{t0}"\n'
-        f'style_root = "bg:{s0} fg:{t0}"\n'
+        f'style_user = "bg:{user} fg:{user_fg} bold"\n'
+        f'style_root = "bg:{user} fg:{user_fg} bold"\n'
         'format = "[ $user ]($style)"\n'
         "\n"
         "[directory]\n"
-        f'style = "bg:{s1} fg:{t1}"\n'
-        'format = "[ $path ]($style)"\n'
+        f'style = "fg:{dir_fg} bg:{directory} bold"\n'
+        'format = "[ \uf07b $path ]($style)"\n'
         "truncation_length = 3\n"
-        'truncation_symbol = ".../"\n'
+        'truncation_symbol = "…/"\n'
         "\n"
         "[git_branch]\n"
-        f'style = "bg:{s2} fg:{t2}"\n'
-        'format = "[ $branch ]($style)"\n'
+        'symbol = "\uf418"\n'
+        f'style = "bg:{git}"\n'
+        f"format = '[[ $symbol $branch ](fg:{git_fg} bg:{git})]($style)'\n"
         "\n"
         "[git_status]\n"
-        f'style = "bg:{s2} fg:{t2}"\n'
-        'format = "[$all_status$ahead_behind]($style)"\n'
+        f'style = "bg:{git}"\n'
+        f"format = '[[($all_status$ahead_behind )](fg:{git_fg} bg:{git})]($style)'\n"
         "\n"
-        "[time]\n"
+        f"{lang_toml}\n"
+        "[docker_context]\n"
+        'symbol = "\uf308"\n'
+        f'style = "bg:{extra}"\n'
+        f"format = '[[ $symbol $context ](fg:{extra_fg} bg:{extra})]($style)'\n"
+        "\n"
+        "[custom.shellmark]\n"
+        'when = "test \\"${SHLVL:-1}\\" -gt 2"\n'
+        'command = "printf Z"\n'
+        f'style = "bg:{extra} fg:{extra_fg} bold"\n'
+        'format = "[ $output ]($style)"\n'
+        "\n"
+        "[line_break]\n"
         "disabled = false\n"
-        'time_format = "%R"\n'
-        f'style = "bg:{s3} fg:{t3}"\n'
-        'format = "[ $time ]($style) "\n'
         "\n"
         "[character]\n"
-        f'success_symbol = "[>](fg:{s0} bold)"\n'
-        f'error_symbol = "[>](fg:{red} bold)"\n'
+        f'success_symbol = "[>](fg:{prompt} bold)"\n'
+        f'error_symbol = "[>](fg:{error} bold)"\n'
+        f'vimcmd_symbol = "[>](fg:{prompt} bold)"\n'
+        f'vimcmd_replace_one_symbol = "[>](fg:{error} bold)"\n'
+        f'vimcmd_replace_symbol = "[>](fg:{error} bold)"\n'
+        f'vimcmd_visual_symbol = "[>](fg:{directory} bold)"\n'
     )
 
 
@@ -192,6 +385,111 @@ def nearest_apple_accent(hex_color: str) -> int:
         return min(dh, 1 - dh)
 
     return min(hues, key=dist)
+
+
+def _hue_blocked(theme: str, hue: float) -> bool:
+    """Hues this theme's staining is not allowed to use."""
+    if theme == "enter-the-matrix":
+        # Blue, and the red that sits outside the green theme.
+        if 0.46 <= hue <= 0.78:
+            return True
+        if hue <= 0.06 or hue >= 0.90:
+            return True
+        return False
+    if theme == "space-monkey":
+        return 0.40 <= hue <= 0.84
+    if theme == "snow-black":
+        # Sky blue. The cool grays and the teal stay.
+        return 0.55 <= hue <= 0.80
+    return False
+
+
+def restyle_theme(colors: dict[str, str], theme: str) -> dict[str, str]:
+    """Move blocked hues onto the rest of the theme before anything is painted.
+
+    Matrix has no blue and no red. Space Monkey has no teal, blue, or periwinkle.
+    The same hex always moves to the same replacement, so a normal color
+    and its bright copy stay a pair.
+    """
+    colors["_theme_name"] = theme
+    if theme not in {"enter-the-matrix", "space-monkey"}:
+        return colors
+    keys = (
+        "red",
+        "orange",
+        "yellow",
+        "green",
+        "cyan",
+        "blue",
+        "magenta",
+        "accent",
+        "bright_red",
+        "bright_yellow",
+        "bright_green",
+        "bright_cyan",
+        "bright_blue",
+        "bright_magenta",
+        "color1",
+        "color2",
+        "color3",
+        "color4",
+        "color5",
+        "color6",
+        "color9",
+        "color10",
+        "color11",
+        "color12",
+        "color13",
+        "color14",
+        "_theme_accent",
+    )
+    # Matrix replacements stay in the green. Space Monkey replacements stay warm.
+    # Neither set sits on the theme's own yellow, or the new color steals that role.
+    landings = (0.32, 0.38, 0.27) if theme == "enter-the-matrix" else (0.03, 0.97, 0.08)
+    kept: list[str] = []
+    pending: list[str] = []
+    for key in keys:
+        value = colors.get(key)
+        if not value or not str(value).startswith("#"):
+            continue
+        hue, sat, _val = _hsv_of(value)
+        if sat >= 0.18 and _hue_blocked(theme, hue):
+            pending.append(key)
+        elif sat >= 0.18:
+            kept.append(value)
+    cache: dict[str, str] = {}
+    used = list(kept)
+    for key in pending:
+        raw = colors[key]
+        token = raw.lower()
+        if token in cache:
+            colors[key] = cache[token]
+            continue
+        _hue, sat, val = _hsv_of(raw)
+        best = raw
+        best_score = -1.0
+        # Matrix replacements stay with the other greens, not a neon.
+        hi = 0.72 if theme == "enter-the-matrix" else 0.92
+        for hue in landings:
+            for delta in (0.0, 0.1, -0.08):
+                cand = _from_hsv(
+                    hue,
+                    min(0.82, max(sat, 0.5)),
+                    min(hi, max(0.38, val + delta)),
+                )
+                score = min((color_distance(cand, other) for other in used), default=999.0)
+                if score > best_score:
+                    best, best_score = cand, score
+        cache[token] = best
+        used.append(best)
+        colors[key] = best
+    return colors
+
+
+def _surface_colors(colors: dict[str, str]) -> list[str]:
+    """Colors for meters, listings, and chrome."""
+    ink = ansi_palette(colors)
+    return [ink[2], ink[3], ink[1], ink[4], ink[6], ink[5]]
 
 
 def normalize(colors: dict[str, str]) -> dict[str, str]:
@@ -236,6 +534,363 @@ def mix_hex(a: str, b: str, t: float) -> str:
     g = int(ag * (1 - t) + bg * t)
     bl = int(ab * (1 - t) + bb * t)
     return f"#{r:02x}{g:02x}{bl:02x}"
+
+
+def _hsv_of(color: str) -> tuple[float, float, float]:
+    r, g, b = hex_to_rgb(color)
+    return colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+
+
+def _from_hsv(h: float, s: float, v: float) -> str:
+    r, g, b = colorsys.hsv_to_rgb(h % 1.0, max(0.0, min(1.0, s)), max(0.0, min(1.0, v)))
+    return f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}"
+
+
+def punch_on(color: str, surface: str) -> str:
+    """Keep the hue, but pull it far enough off the surface to read.
+
+    Gray stays gray. A chromatic theme color gets enough saturation and
+    lightness that it does not collapse into the background.
+    """
+    h, s, v = _hsv_of(color)
+    dark = luminance(surface) < 0.5
+    # Already readable against the surface: keep the hex, pale pastels
+    # included. Recoloring those is what pulled themes off their own colors.
+    if abs(luminance(color) - luminance(surface)) >= 0.15 or color_distance(color, surface) >= 70:
+        return color
+    if s < 0.14:
+        v = max(v, 0.58) if dark else min(v, 0.36)
+        return _from_hsv(h, s, v)
+    s = min(0.84, max(s, 0.5))
+    v = min(0.9, max(v, 0.58)) if dark else max(0.22, min(v, 0.46))
+    out = _from_hsv(h, s, v)
+    if abs(luminance(out) - luminance(surface)) < 0.2:
+        out = _from_hsv(h, s, 0.76 if dark else 0.28)
+    return out
+
+
+def comment_ink(colors: dict[str, str]) -> str:
+    """Dimmer than code, still readable on the theme background."""
+    h, s, _v = _hsv_of(colors["muted"])
+    dark = luminance(colors["background"]) < 0.5
+    if s < 0.14:
+        return _from_hsv(h, s, 0.48 if dark else 0.38)
+    return _from_hsv(h, min(0.55, max(s, 0.28)), 0.52 if dark else 0.36)
+
+
+def contrasting_bg(text: str, preferred: str) -> str:
+    """A bar color apps can paint under text they refuse to recolor."""
+    if abs(luminance(preferred) - luminance(text)) >= 0.45:
+        return preferred
+    target = "#101010" if luminance(text) > 0.55 else "#f3f3f3"
+    chosen = preferred
+    for step in (0.35, 0.55, 0.75, 0.9, 1.0):
+        chosen = mix_hex(preferred, target, step)
+        if abs(luminance(chosen) - luminance(text)) >= 0.45:
+            return chosen
+    return chosen
+
+
+def _hue_dist(a: float, b: float) -> float:
+    span = abs(a - b)
+    return min(span, 1.0 - span)
+
+
+def chromatic_family(colors: dict[str, str]) -> list[tuple[float, float]]:
+    """Hues the theme already uses, strongest first.
+
+    Gray slots borrow from this family instead of staying identical.
+    """
+    found: list[tuple[float, float]] = []
+    keys = [f"color{i}" for i in range(1, 15)] + ["accent"]
+    for key in keys:
+        value = colors.get(key)
+        if not value:
+            continue
+        hue, sat, val = _hsv_of(value)
+        if sat < 0.16 or val < 0.12:
+            continue
+        if any(_hue_dist(hue, other) < 0.05 for other, _sat in found):
+            continue
+        found.append((hue, sat))
+    found.sort(key=lambda item: item[1], reverse=True)
+    return found
+
+
+def enrich_ansi(colors: dict[str, str], ink: list[str]) -> list[str]:
+    """Give colliding or gray ANSI slots their own step in the theme's hues.
+
+    A slot that is already its own color is left alone.
+    """
+    if colors.get("_theme_name") == "snow-black":
+        # The gray slots are the lace. Borrowing the teal walks them into
+        # pale blue, which fights the wallpaper.
+        return ink
+    family = chromatic_family(colors)
+    if not family:
+        return ink
+    dark = luminance(colors["background"]) < 0.5
+    out = list(ink)
+    placed: list[str] = []
+    for index, slot in enumerate((1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14)):
+        _hue, sat, _val = _hsv_of(out[slot])
+        # Only gray slots borrow a hue. A chromatic slot is the theme's
+        # own choice, even when two of them sit close (Matrix cyan and green).
+        if sat < 0.18:
+            base_hue, base_sat = family[index % len(family)]
+            used = sum(1 for prev in placed if _hue_dist(_hsv_of(prev)[0], base_hue) < 0.08)
+            hue = (base_hue + min(0.10, used * 0.04)) % 1.0
+            if dark:
+                val = (0.58 if slot < 8 else 0.74) + (used % 4) * 0.08
+            else:
+                val = (0.42 if slot < 8 else 0.32) - (used % 3) * 0.05
+            out[slot] = _from_hsv(hue, min(0.84, max(base_sat, 0.5)), max(0.26, min(0.94, val)))
+        placed.append(out[slot])
+    return out
+
+
+def ansi_palette(colors: dict[str, str]) -> list[str]:
+    """The 16 colors the theme wrote down.
+
+    A slot changes only when it would vanish into the background, or when
+    a gray slot borrows one of the theme's hues. Monokai pink and Matrix
+    green stay the hex in colors.toml, including the bright row when the
+    theme made those the same color.
+    """
+    bg = colors["background"]
+    out: list[str] = []
+    for i in range(16):
+        raw = colors[f"color{i}"]
+        if i in (7, 15):
+            out.append(raw)
+        elif i in (0, 8) and color_distance(raw, bg) < 18:
+            out.append(mix_hex(bg, colors["foreground"], 0.16 if i == 0 else 0.34))
+        elif i in (0, 8):
+            out.append(raw)
+        else:
+            out.append(punch_on(raw, bg))
+    return separate_slots(enrich_ansi(colors, out), colors)
+
+
+def separate_slots(ink: list[str], colors: dict[str, str] | None = None) -> list[str]:
+    """Split slots that still match, without leaving the theme's hue.
+
+    A bright color the theme set equal to its normal color stays equal.
+    """
+    pairs = {9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 6}
+    out = list(ink)
+    placed: list[str] = []
+    for slot in (1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14):
+        if colors and slot in pairs:
+            base = colors.get(f"color{pairs[slot]}", "")
+            bright = colors.get(f"color{slot}", "")
+            if base.lower() == bright.lower():
+                placed.append(out[slot])
+                continue
+        hue, sat, val = _hsv_of(out[slot])
+        color = out[slot]
+        for step in range(7):
+            light = min(0.96, max(0.34, val + step * 0.08))
+            candidate = color if step == 0 else _from_hsv(hue, sat, light)
+            if all(color_distance(candidate, prev) >= 28 for prev in placed):
+                color = candidate
+                break
+        out[slot] = color
+        placed.append(color)
+    return out
+
+
+def theme_face(colors: dict[str, str]) -> str:
+    """The color a theme is recognized by: its accent, not the loudest ANSI slot.
+
+    Matrix defines a red, but the theme is the green. Wallpaper mixing
+    stores the original accent on `_theme_accent` so Ghostty does not
+    inherit the desktop sample.
+    """
+    raw = colors.get("_theme_accent") or colors["accent"]
+    if _hsv_of(raw)[1] >= 0.18 and abs(luminance(raw) - luminance(colors["background"])) >= 0.16:
+        return raw
+    return signature_ink(colors)
+
+
+def signature_ink(colors: dict[str, str]) -> str:
+    """The username badge uses a color the theme actually defined."""
+    found: list[str] = []
+    for key in ("color1", "color2", "color3", "color4", "color5", "color6", "accent"):
+        raw = colors.get(key)
+        if not raw or _hsv_of(raw)[1] < 0.16:
+            continue
+        punched = punch_on(raw, colors["background"])
+        if all(color_distance(punched, prev) >= 28 for prev in found):
+            found.append(punched)
+    if not found:
+        return ansi_palette(colors)[vivid_slots(colors)[0]]
+    return max(found, key=lambda item: _hsv_of(item)[1])
+
+
+def _cube_cell(bg: str, red: str, green: str, blue: str, r: float, g: float, b: float) -> str:
+    """Keep the winning hue. Averaging teal with rose just makes gray."""
+    ranked = sorted(((r, red), (g, green), (b, blue)), key=lambda item: item[0], reverse=True)
+    if ranked[0][0] <= 0:
+        return bg
+    mixed = ranked[0][1]
+    if ranked[1][0] > 0:
+        mixed = mix_hex(mixed, ranked[1][1], 0.22 * ranked[1][0])
+    return mix_hex(bg, mixed, max(r, g, b))
+
+
+def palette_256(colors: dict[str, str]) -> list[str]:
+    """ANSI slots plus a cube and gray ramp built from this theme.
+
+    Ghostty otherwise keeps the stock xterm cube, so anything using
+    256 colors ignores the theme.
+    """
+    ansi = ansi_palette(colors)
+    steps = (0.0, 0.2, 0.38, 0.56, 0.76, 1.0)
+    red, green, blue = ansi[1], ansi[2], ansi[4]
+    bg, fg = colors["background"], colors["foreground"]
+    cube = [
+        _cube_cell(bg, red, green, blue, r, g, b)
+        for r in steps
+        for g in steps
+        for b in steps
+    ]
+    ramp = [mix_hex(bg, fg, i / 23) for i in range(24)]
+    palette = ansi + cube + ramp
+    if len(palette) != 256:
+        raise RuntimeError(f"palette length {len(palette)}")
+    return palette
+
+
+def syntax_inks(colors: dict[str, str]) -> dict[str, str]:
+    ansi = ansi_palette(colors)
+    found = {
+        "comment": comment_ink(colors),
+        "string": ansi[2],
+        "regexp": ansi[1],
+        "escape": ansi[9],
+        "number": ansi[3],
+        "keyword": ansi[1],
+        "storage": ansi[5],
+        "operator": ansi[5],
+        "function": ansi[4],
+        "method": ansi[12],
+        "type": ansi[3],
+        "class": ansi[11],
+        "namespace": ansi[6],
+        "variable": colors["foreground"],
+        "parameter": ansi[13],
+        "property": ansi[6],
+        "constant": ansi[5],
+        "tag": ansi[1],
+        "attribute": ansi[3],
+        "heading": punch_on(colors["accent"], colors["background"]),
+        "link": ansi[4],
+        "inserted": ansi[2],
+        "deleted": ansi[1],
+        "changed": ansi[3],
+        "invalid": ansi[9],
+        "decorator": ansi[5],
+        "punctuation": comment_ink(colors),
+    }
+    return found
+
+
+# scope, ink key, optional fontStyle. Every theme reuses this table.
+SYNTAX_SCOPES: tuple[tuple[str, str, str], ...] = (
+    ("comment", "comment", "italic"),
+    ("comment.line", "comment", "italic"),
+    ("comment.block", "comment", "italic"),
+    ("comment.block.documentation", "namespace", "italic"),
+    ("comment.block.docstring", "namespace", "italic"),
+    ("punctuation.definition.comment", "comment", ""),
+    ("string", "string", ""),
+    ("string.quoted", "string", ""),
+    ("string.template", "string", ""),
+    ("string.interpolated", "escape", ""),
+    ("string.regexp", "regexp", ""),
+    ("constant.character.escape", "escape", ""),
+    ("punctuation.definition.string", "string", ""),
+    ("constant.numeric", "number", ""),
+    ("constant.language", "number", ""),
+    ("constant.character", "number", ""),
+    ("constant.other", "constant", ""),
+    ("constant.other.symbol", "constant", ""),
+    ("constant.other.placeholder", "changed", ""),
+    ("keyword", "keyword", ""),
+    ("keyword.control", "keyword", ""),
+    ("keyword.control.import", "storage", ""),
+    ("keyword.control.from", "storage", ""),
+    ("keyword.operator", "operator", ""),
+    ("keyword.other", "storage", ""),
+    ("keyword.other.unit", "number", ""),
+    ("storage", "storage", ""),
+    ("storage.type", "type", ""),
+    ("storage.modifier", "storage", ""),
+    ("storage.type.class", "class", ""),
+    ("storage.type.function", "function", ""),
+    ("entity.name.function", "function", ""),
+    ("entity.name.function.method", "method", ""),
+    ("support.function", "function", ""),
+    ("support.function.builtin", "method", ""),
+    ("meta.function-call", "function", ""),
+    ("variable.function", "function", ""),
+    ("entity.name.class", "class", ""),
+    ("entity.name.type", "type", ""),
+    ("entity.name.namespace", "namespace", ""),
+    ("entity.other.inherited-class", "class", ""),
+    ("support.class", "class", ""),
+    ("support.type", "type", ""),
+    ("support.constant", "constant", ""),
+    ("variable", "variable", ""),
+    ("variable.other", "variable", ""),
+    ("variable.parameter", "parameter", ""),
+    ("variable.language", "constant", ""),
+    ("variable.other.member", "property", ""),
+    ("variable.other.property", "property", ""),
+    ("variable.other.constant", "constant", ""),
+    ("variable.annotation", "decorator", ""),
+    ("entity.name.tag", "tag", ""),
+    ("punctuation.definition.tag", "tag", ""),
+    ("entity.other.attribute-name", "attribute", ""),
+    ("entity.other.attribute-name.id", "function", ""),
+    ("entity.other.attribute-name.class", "type", ""),
+    ("support.type.property-name", "property", ""),
+    ("meta.object-literal.key", "property", ""),
+    ("meta.mapping.key", "property", ""),
+    ("entity.name.section", "heading", "bold"),
+    ("markup.heading", "heading", "bold"),
+    ("markup.heading.1", "heading", "bold"),
+    ("markup.heading.2", "function", "bold"),
+    ("markup.heading.3", "type", "bold"),
+    ("punctuation.definition.heading", "heading", ""),
+    ("markup.bold", "variable", "bold"),
+    ("markup.italic", "namespace", "italic"),
+    ("markup.raw", "string", ""),
+    ("markup.inline.raw", "string", ""),
+    ("markup.quote", "comment", "italic"),
+    ("markup.list", "heading", ""),
+    ("markup.underline.link", "link", "underline"),
+    ("string.other.link", "link", "underline"),
+    ("markup.inserted", "inserted", ""),
+    ("markup.deleted", "deleted", ""),
+    ("markup.changed", "changed", ""),
+    ("punctuation", "punctuation", ""),
+    ("punctuation.definition", "punctuation", ""),
+    ("punctuation.separator", "punctuation", ""),
+    ("punctuation.terminator", "punctuation", ""),
+    ("meta.brace", "punctuation", ""),
+    ("invalid", "invalid", ""),
+    ("invalid.deprecated", "comment", "italic"),
+    ("entity.name.decorator", "decorator", ""),
+    ("meta.decorator", "decorator", ""),
+    ("keyword.other.special-method", "method", ""),
+    ("support.type.vendored", "namespace", ""),
+    ("token.info-token", "function", ""),
+    ("token.warn-token", "changed", ""),
+    ("token.error-token", "deleted", ""),
+    ("token.debug-token", "comment", ""),
+)
 
 
 def _paeth(a: int, b: int, c: int) -> int:
@@ -337,6 +992,8 @@ def adapt_colors(colors: dict[str, str], wallpaper: Path | None) -> dict[str, st
     avg, vibrant, lum = sample_wallpaper(wallpaper)
     if not avg or not vibrant:
         return adapted
+    adapted["_theme_accent"] = colors["accent"]
+    adapted["_theme_selection"] = colors.get("selection_background", colors["accent"])
     adapted["accent"] = mix_hex(colors["accent"], vibrant, 0.42)
     adapted["selection_background"] = mix_hex(colors["selection_background"], avg, 0.28)
     if lum is not None:
@@ -392,11 +1049,774 @@ def apply_color_mode(colors: dict[str, str], wallpaper: Path | None, mode: str) 
     return out
 
 
+def bar_item_bg(colors: dict[str, str]) -> str:
+    """Fill behind the bar's icon pills.
+
+    The old fill was color8. On Space Monkey that is a light gray, which
+    sits on the rust-and-brown theme like a sticker. Build the pill from
+    the theme background plus a little accent instead. A light wallpaper
+    shows through the clear bar, so Snow's near-black pill becomes a
+    hole; lift that one toward the wallpaper, and stop while white
+    labels on the pill still read.
+    """
+    bg = colors["background"]
+    accent = _chrome_accent(colors)
+    pill = mix_hex(bg, accent, 0.32)
+    if color_distance(pill, bg) < 20:
+        pill = mix_hex(bg, colors["foreground"], 0.14)
+    wall = colors.get("_wallpaper_avg")
+    if colors.get("_wallpaper_light") == "1" and wall:
+        lifted = pill
+        # Snow's lace wallpaper is bright. A slightly higher cap keeps the
+        # pills readable and a step lighter than the first lift.
+        cap = 0.56 if colors.get("_theme_name") == "snow-black" else 0.44
+        for step in (0.28, 0.40, 0.52, 0.64, 0.74):
+            candidate = mix_hex(pill, wall, step)
+            if luminance(candidate) > cap:
+                break
+            lifted = candidate
+        pill = lifted
+    return pill
+
+
+def _is_current_theme(theme_dir: Path) -> bool:
+    link = Path.home() / ".config/omarchy/current/theme"
+    try:
+        return link.resolve() == theme_dir.resolve()
+    except OSError:
+        return False
+
+
+# Each theme's own ladder. Do not invent a hue the palette does not have:
+# snow stays rose / pink / teal / silver, matrix stays in the greens.
+_THEME_ROLES: dict[str, dict[str, str]] = {
+    "snow-black": {
+        "keyword": "#A06666",
+        "string": "#DD9999",
+        "function": "#5F8787",
+        "type": "#C1C1C1",
+        "number": "#A06666",
+        "constant": "#5F8787",
+        "accent": "#A06666",
+    },
+    "azure": {
+        "keyword": "#8da1c8",
+        "string": "#a7d0ec",
+        "function": "#61a7d6",
+        "type": "#B2C5D9",
+        "number": "#6cabda",
+        "constant": "#5693C4",
+        "accent": "#61a7d6",
+    },
+    "enter-the-matrix": {
+        "keyword": "#7BAE4E",
+        "string": "#A8BE5A",
+        "function": "#4CAF7E",
+        "type": "#7CBCA0",
+        "number": "#A8BE5A",
+        "constant": "#7BAE4E",
+        "accent": "#7BAE4E",
+    },
+    "space-monkey": {
+        "keyword": "#bd4924",
+        "string": "#df782d",
+        "function": "#fd6883",
+        "type": "#f9cc6c",
+        "number": "#bd4924",
+        "constant": "#fd6883",
+        "accent": "#bd4924",
+    },
+}
+
+
+def _paint_roles(colors: dict[str, str]) -> dict[str, str]:
+    """Syntax roles from this theme's own colors, not a neighboring hue."""
+    named = _THEME_ROLES.get(colors.get("_theme_name", ""))
+    if named:
+        return dict(named)
+    ink = ansi_palette(colors)
+    bg = colors["background"]
+    found: list[str] = []
+    for swatch in ink[1:7]:
+        _hue, sat, _val = _hsv_of(swatch)
+        if sat < 0.16 or color_distance(swatch, bg) < 36:
+            continue
+        if any(color_distance(swatch, prev) < 26 for prev in found):
+            continue
+        found.append(swatch)
+    found.sort(key=lambda item: _hsv_of(item)[1], reverse=True)
+    if not found:
+        found = [theme_face(colors)]
+    hue, sat, val = _hsv_of(found[0])
+    theme = colors.get("_theme_name", "")
+    while len(found) < 4:
+        step = len(found)
+        delta = 0.07 * step
+        if _hue_blocked(theme, (hue + delta) % 1.0):
+            delta = -0.05 * step
+        found.append(
+            _from_hsv(
+                (hue + delta) % 1.0,
+                min(0.62, max(sat, 0.28)),
+                min(0.9, max(0.5, val + (0.1 if step % 2 else -0.06))),
+            )
+        )
+    accent = colors["accent"]
+    if _hsv_of(accent)[1] < 0.18:
+        accent = found[0]
+    return {
+        "keyword": found[0],
+        "string": found[1],
+        "function": found[2],
+        "type": found[3],
+        "number": found[0],
+        "constant": found[2],
+        "accent": accent,
+    }
+
+
+def render_neovim(colors: dict[str, str]) -> str:
+    """One colorscheme per theme, sourced from the current-theme symlink."""
+    ink = ansi_palette(colors)
+    bg, fg = colors["background"], colors["foreground"]
+    comment = comment_ink(colors)
+    roles = _paint_roles(colors)
+    accent = roles["accent"]
+    c1, c2, c3 = roles["keyword"], roles["string"], roles["function"]
+    c4 = roles["type"]
+    cursor = colors.get("cursor") or fg
+    if _hsv_of(cursor)[1] < 0.18:
+        cursor = accent
+    c8 = ink[8]
+    line_nr = c8 if abs(luminance(c8) - luminance(bg)) >= 0.18 else comment
+    line = mix_hex(bg, accent, 0.1)
+    menu = mix_hex(bg, accent, 0.16)
+    visual = mix_hex(bg, accent, 0.42)
+    dark = "dark" if luminance(bg) < 0.5 else "light"
+    lines = [
+        "-- generated by theme-pack from the active omacosy theme",
+        'vim.cmd("hi clear")',
+        'if vim.fn.exists("syntax_on") == 1 then',
+        '  vim.cmd("syntax reset")',
+        "end",
+        f'vim.o.background = "{dark}"',
+        "vim.o.termguicolors = true",
+        'vim.g.colors_name = "omacosy"',
+    ]
+    for i, swatch in enumerate(ink):
+        lines.append(f'vim.g.terminal_color_{i} = "{swatch}"')
+
+    def hi(group: str, **opts: str | bool) -> None:
+        parts: list[str] = []
+        for key, value in opts.items():
+            if isinstance(value, bool):
+                parts.append(f"{key} = {'true' if value else 'false'}")
+            else:
+                parts.append(f'{key} = "{value}"')
+        lines.append(f'vim.api.nvim_set_hl(0, "{group}", {{ {", ".join(parts)} }})')
+
+    hi("Normal", fg=fg, bg=bg)
+    hi("NormalFloat", fg=fg, bg=menu)
+    hi("FloatBorder", fg=accent, bg=menu)
+    hi("Cursor", fg=text_on(cursor, colors), bg=cursor)
+    hi("CursorLine", bg=line)
+    hi("CursorLineNr", fg=accent, bold=True)
+    hi("LineNr", fg=line_nr)
+    hi("Visual", bg=visual)
+    hi("Search", fg=text_on(c1, colors), bg=c1)
+    hi("IncSearch", fg=text_on(c2, colors), bg=c2)
+    hi("Comment", fg=comment, italic=True)
+    hi("Constant", fg=roles["constant"])
+    hi("String", fg=c2)
+    hi("Character", fg=c2)
+    hi("Number", fg=roles["number"])
+    hi("Boolean", fg=roles["number"])
+    hi("Float", fg=roles["number"])
+    hi("Identifier", fg=fg)
+    hi("Function", fg=c3)
+    hi("Statement", fg=c1)
+    hi("Keyword", fg=c1)
+    hi("Conditional", fg=c1)
+    hi("Repeat", fg=c1)
+    hi("Operator", fg=c4)
+    hi("PreProc", fg=c3)
+    hi("Type", fg=c4)
+    hi("Special", fg=c2)
+    hi("Todo", fg=text_on(accent, colors), bg=accent, bold=True)
+    hi("Title", fg=accent, bold=True)
+    hi("Directory", fg=c3)
+    hi("MatchParen", fg=accent, bold=True)
+    hi("StatusLine", fg=fg, bg=menu)
+    hi("StatusLineNC", fg=comment, bg=line)
+    hi("TabLine", fg=comment, bg=line)
+    hi("TabLineSel", fg=text_on(accent, colors), bg=accent)
+    hi("Pmenu", fg=fg, bg=menu)
+    hi("PmenuSel", fg=text_on(accent, colors), bg=accent)
+    hi("WinSeparator", fg=c8)
+    hi("VertSplit", fg=c8)
+    hi("DiagnosticError", fg=c1)
+    hi("DiagnosticWarn", fg=roles["number"])
+    hi("DiagnosticInfo", fg=c3)
+    hi("DiagnosticHint", fg=c4)
+    hi("DiagnosticUnderlineError", sp=c1, undercurl=True)
+    hi("DiagnosticUnderlineWarn", sp=roles["number"], undercurl=True)
+    hi("DiagnosticUnderlineInfo", sp=c3, undercurl=True)
+    hi("DiagnosticUnderlineHint", sp=c4, undercurl=True)
+    hi("DiffAdd", fg=c2)
+    hi("DiffChange", fg=c3)
+    hi("DiffDelete", fg=c1)
+    for group, link in (
+        ("@comment", "Comment"),
+        ("@string", "String"),
+        ("@number", "Number"),
+        ("@boolean", "Boolean"),
+        ("@function", "Function"),
+        ("@function.call", "Function"),
+        ("@keyword", "Keyword"),
+        ("@type", "Type"),
+        ("@variable", "Identifier"),
+        ("@constant", "Constant"),
+        ("@operator", "Operator"),
+    ):
+        lines.append(f'vim.api.nvim_set_hl(0, "{group}", {{ link = "{link}" }})')
+    lines.extend(
+        [
+            "vim.o.cursorline = true",
+            "vim.o.number = true",
+            "vim.o.signcolumn = 'yes'",
+            "vim.o.laststatus = 3",
+            "vim.o.smoothscroll = true",
+            'vim.o.fillchars = "eob: ,vert:│,horiz:─"',
+            'vim.o.statusline = "%#TabLineSel# %t %m %#StatusLine#%= %Y  %l:%c "',
+            "",
+        ]
+    )
+    lines.extend(_cursor_effect_lua(colors.get("_theme_name", ""), roles, line, text_on(accent, colors)))
+    return "\n".join(lines)
+
+
+def _cursor_effect_lua(theme: str, roles: dict[str, str], line_bg: str, cursor_fg: str) -> list[str]:
+    """One cursor motion per theme. Resourcing stops the previous timer."""
+    accent, string, function, kind = roles["accent"], roles["string"], roles["function"], "pulse"
+    shape = "n-v-c:ver25-Cursor,i-ci-ve:ver25-Cursor,r-cr:hor20-Cursor"
+    if theme == "enter-the-matrix":
+        kind, shape = "trail", "n-v-c:block-Cursor,i-ci-ve:ver25-Cursor"
+    elif theme == "space-monkey":
+        kind, shape = "beacon", "n-v-c:block-Cursor,i-ci-ve:ver30-Cursor"
+    elif theme == "azure":
+        kind, shape = "glide", "n-v-c:ver30-Cursor,i-ci-ve:ver30-Cursor,r-cr:hor20-Cursor"
+    shades = [accent, string, function]
+    shade_lua = ", ".join(f'"{item}"' for item in shades)
+    return [
+        f'vim.o.guicursor = "{shape}"',
+        "if _G.omacosy_cursor and _G.omacosy_cursor.timer then",
+        "  pcall(function()",
+        "    _G.omacosy_cursor.timer:stop()",
+        "    _G.omacosy_cursor.timer:close()",
+        "  end)",
+        "end",
+        "_G.omacosy_cursor = { token = 0 }",
+        f'local shades = {{ {shade_lua} }}',
+        f'local linebg = "{line_bg}"',
+        f'local cursorfg = "{cursor_fg}"',
+        f'local kind = "{kind}"',
+        'local group = vim.api.nvim_create_augroup("omacosy-cursor", { clear = true })',
+        "if kind == \"pulse\" then",
+        "  local i = 0",
+        "  local timer = vim.uv.new_timer()",
+        "  _G.omacosy_cursor.timer = timer",
+        "  timer:start(0, 680, vim.schedule_wrap(function()",
+        "    i = (i % #shades) + 1",
+        "    vim.api.nvim_set_hl(0, \"Cursor\", { fg = cursorfg, bg = shades[i] })",
+        "  end))",
+        "elseif kind == \"trail\" then",
+        "  local ns = vim.api.nvim_create_namespace(\"omacosy-cursor\")",
+        "  local marks = {}",
+        "  vim.api.nvim_set_hl(0, \"OmacosyTrail1\", { fg = shades[1], bold = true })",
+        "  vim.api.nvim_set_hl(0, \"OmacosyTrail2\", { fg = shades[2] })",
+        "  vim.api.nvim_set_hl(0, \"OmacosyTrail3\", { fg = shades[3] })",
+        "  vim.api.nvim_create_autocmd(\"CursorMoved\", {",
+        "    group = group,",
+        "    callback = function()",
+        "      local buf = vim.api.nvim_get_current_buf()",
+        "      local pos = vim.api.nvim_win_get_cursor(0)",
+        "      table.insert(marks, 1, { buf, pos[1] - 1, pos[2] })",
+        "      while #marks > 3 do table.remove(marks) end",
+        "      vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)",
+        "      for n, mark in ipairs(marks) do",
+        "        if mark[1] == buf and mark[3] >= 0 then",
+        "          pcall(vim.api.nvim_buf_set_extmark, buf, ns, mark[2], mark[3], {",
+        "            end_col = mark[3] + 1,",
+        "            hl_group = \"OmacosyTrail\" .. n,",
+        "          })",
+        "        end",
+        "      end",
+        "    end,",
+        "  })",
+        "elseif kind == \"beacon\" then",
+        "  local last = { 1, 0 }",
+        "  vim.api.nvim_create_autocmd(\"CursorMoved\", {",
+        "    group = group,",
+        "    callback = function()",
+        "      local pos = vim.api.nvim_win_get_cursor(0)",
+        "      local jump = math.abs(pos[1] - last[1]) + math.abs(pos[2] - last[2])",
+        "      last = { pos[1], pos[2] }",
+        "      if jump < 6 then return end",
+        "      local id = vim.fn.matchaddpos(\"IncSearch\", { { pos[1], math.max(pos[2], 0) + 1, 2 } })",
+        "      vim.defer_fn(function() pcall(vim.fn.matchdelete, id) end, 160)",
+        "    end,",
+        "  })",
+        "else",
+        "  vim.api.nvim_create_autocmd(\"CursorMoved\", {",
+        "    group = group,",
+        "    callback = function()",
+        "      _G.omacosy_cursor.token = _G.omacosy_cursor.token + 1",
+        "      local token = _G.omacosy_cursor.token",
+        "      local bg = linebg",
+        "      for step, blend in ipairs({ 50, 28, 10, 0 }) do",
+        "        vim.defer_fn(function()",
+        "          if token ~= _G.omacosy_cursor.token then return end",
+        "          vim.api.nvim_set_hl(0, \"CursorLine\", { bg = bg, blend = blend })",
+        "        end, step * 36)",
+        "      end",
+        "    end,",
+        "  })",
+        "end",
+        "",
+    ]
+
+
+def ensure_nvim_init() -> None:
+    init = Path.home() / ".config/nvim/init.lua"
+    snippet = (
+        "-- omacosy theme skin\n"
+        "vim.opt.termguicolors = true\n"
+        'local skin = vim.fn.expand("~/.config/omarchy/current/theme/neovim.lua")\n'
+        "if vim.fn.filereadable(skin) == 1 then\n"
+        "  vim.cmd.source(skin)\n"
+        "end\n"
+    )
+    init.parent.mkdir(parents=True, exist_ok=True)
+    if not init.exists():
+        init.write_text(snippet, encoding="utf-8")
+        return
+    text = init.read_text(encoding="utf-8")
+    if "-- omacosy theme skin" not in text:
+        init.write_text(text.rstrip() + "\n\n" + snippet, encoding="utf-8")
+
+
+def render_herdr_theme(colors: dict[str, str]) -> str:
+    """Herdr chrome from this theme. Panes follow Ghostty via name=terminal."""
+    ink = ansi_palette(colors)
+    bg, fg = colors["background"], colors["foreground"]
+    roles = _paint_roles(colors)
+    accent = roles["accent"]
+    c1, c2, c3, c4, c5 = roles["keyword"], roles["string"], roles["function"], roles["type"], ink[5]
+    # Tint the black/navy/green/brown of the theme itself. Mixing through
+    # the gray slot turned snow's rose into a muddy brown.
+    surface0 = mix_hex(bg, accent, 0.16)
+    surface1 = mix_hex(bg, c2, 0.20)
+    overlay0 = mix_hex(bg, accent, 0.10)
+    active = mix_hex(bg, accent, 0.38)
+    return (
+        "# generated by theme-pack from the active omacosy theme\n"
+        "[theme]\n"
+        'name = "terminal"\n'
+        "\n"
+        "[theme.custom]\n"
+        f'text = "{fg}"\n'
+        f'subtext0 = "{comment_ink(colors)}"\n'
+        f'accent = "{accent}"\n'
+        f'red = "{c1}"\n'
+        f'green = "{c2}"\n'
+        f'yellow = "{c3}"\n'
+        f'blue = "{c4}"\n'
+        f'mauve = "{c5}"\n'
+        f'surface0 = "{surface0}"\n'
+        f'surface1 = "{surface1}"\n'
+        f'surface_dim = "{mix_hex(bg, surface0, 0.55)}"\n'
+        f'overlay0 = "{overlay0}"\n'
+        f'overlay1 = "{mix_hex(overlay0, accent, 0.25)}"\n'
+        f'sidebar_bg = "{mix_hex(bg, accent, 0.08)}"\n'
+        'panel_bg = "reset"\n'
+        f'active_row_bg = "{active}"\n'
+        f'selection_bg = "{mix_hex(bg, accent, 0.55)}"\n'
+        "\n"
+        "[ui]\n"
+        'pane_borders = "always"\n'
+        "pane_outer_borders = true\n"
+        "pane_gaps = true\n"
+        "show_agent_labels_on_pane_borders = true\n"
+        'status_indicators = "symbols"\n'
+        f'accent = "{accent}"\n'
+        "\n"
+        "[ui.sidebar.agents]\n"
+        "row_gap = 0\n"
+        "rows = [\n"
+        f'  ["state_icon", {{ token = "agent", fg = "{accent}", bold = true }}, "state_text"],\n'
+        "  [\"workspace\"],\n"
+        "]\n"
+        "\n"
+        "[ui.sidebar.spaces]\n"
+        "row_gap = 0\n"
+        "rows = [\n"
+        f'  ["state_icon", {{ token = "workspace", fg = "{c2}", bold = true }}],\n'
+        f'  [{{ token = "branch", fg = "{c3}" }}, "git_status"],\n'
+        "]\n"
+    )
+
+
+def _herdr_preamble(existing: str) -> str:
+    """Keep user keys. Drop theme/ui tables, and keys left behind when a header was removed."""
+    own = re.compile(
+        r"^\[(?:theme(?:\.custom(?:\.light|\.dark)?)?|ui(?:\.sidebar\.(?:agents|spaces))?)\]\s*$"
+    )
+    header = re.compile(r"^\[[A-Za-z0-9_.-]+\]\s*$")
+    generated_keys = {
+        "name", "text", "subtext0", "accent", "red", "green", "yellow", "blue",
+        "mauve", "surface0", "surface1", "surface_dim", "overlay0", "overlay1",
+        "sidebar_bg", "panel_bg", "active_row_bg", "selection_bg", "pane_gaps",
+        "pane_borders", "pane_outer_borders", "show_agent_labels_on_pane_borders",
+        "status_indicators", "row_gap", "rows",
+    }
+    out: list[str] = []
+    dropping = False
+    foreign = False
+    for line in existing.splitlines():
+        if "generated by theme-pack" in line:
+            continue
+        if own.match(line):
+            dropping = True
+            foreign = False
+            continue
+        if header.match(line):
+            dropping = False
+            foreign = True
+            out.append(line)
+            continue
+        if dropping:
+            continue
+        if foreign:
+            out.append(line)
+            continue
+        stripped = line.strip()
+        if stripped == "" or line.startswith("#"):
+            out.append(line)
+            continue
+        key = re.match(r"^([A-Za-z0-9_-]+)\s*=", line)
+        if key and key.group(1) not in generated_keys:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def write_herdr(theme_dir: Path, colors: dict[str, str]) -> None:
+    if not _is_current_theme(theme_dir):
+        return
+    dest = Path.home() / ".config/herdr/config.toml"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    existing = dest.read_text(encoding="utf-8") if dest.is_file() else ""
+    kept = _herdr_preamble(existing)
+    body = (kept + "\n\n" if kept else "") + render_herdr_theme(colors)
+    dest.write_text(body if body.endswith("\n") else body + "\n", encoding="utf-8")
+    herdr = shutil.which("herdr")
+    if not herdr:
+        return
+    check = subprocess.run(
+        [herdr, "config", "check"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if check.returncode != 0:
+        print(check.stdout.strip(), file=sys.stderr)
+        return
+    subprocess.run(
+        [herdr, "server", "reload-config"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def render_yazi(colors: dict[str, str]) -> str:
+    """Yazi file list in this theme's own colors."""
+    bg, fg = colors["background"], colors["foreground"]
+    roles = _paint_roles(colors)
+    accent, keyword, string = roles["accent"], roles["keyword"], roles["string"]
+    function, kind = roles["function"], roles["type"]
+    comment = comment_ink(colors)
+    on = text_on(accent, colors)
+    surface = mix_hex(bg, accent, 0.16)
+
+    def style(**opts: str | bool) -> str:
+        parts = []
+        for key, value in opts.items():
+            if isinstance(value, bool):
+                parts.append(f"{key} = {'true' if value else 'false'}")
+            else:
+                parts.append(f'{key} = "{value}"')
+        return "{ " + ", ".join(parts) + " }"
+
+    return "\n".join(
+        [
+            "# generated by theme-pack from the active omacosy theme",
+            "",
+            "[mgr]",
+            f"cwd = {style(fg=function)}",
+            f"find_keyword = {style(fg=string, bold=True, italic=True)}",
+            f"find_position = {style(fg=accent, bold=True)}",
+            f"marker_copied = {style(fg=string, bg=string)}",
+            f"marker_cut = {style(fg=keyword, bg=keyword)}",
+            f"marker_selected = {style(fg=kind, bg=kind)}",
+            'marker_symbol = "│"',
+            f"border_style = {style(fg=accent)}",
+            "",
+            "[tabs]",
+            f"active = {style(fg=on, bg=accent, bold=True)}",
+            f"inactive = {style(fg=comment, bg=surface)}",
+            'sep_inner = { open = "", close = "" }',
+            'sep_outer = { open = "", close = "" }',
+            "",
+            "[indicator]",
+            f"parent = {style(fg=fg, bg=surface)}",
+            f"current = {style(fg=on, bg=accent, bold=True)}",
+            "preview = { underline = true }",
+            'padding = { open = "", close = "" }',
+            "",
+            "[mode]",
+            f"normal_main = {style(fg=on, bg=accent, bold=True)}",
+            f"normal_alt = {style(fg=accent, bg=surface)}",
+            f"select_main = {style(fg=text_on(string, colors), bg=string, bold=True)}",
+            f"select_alt = {style(fg=string, bg=surface)}",
+            f"unset_main = {style(fg=text_on(keyword, colors), bg=keyword, bold=True)}",
+            f"unset_alt = {style(fg=keyword, bg=surface)}",
+            "",
+            "[status]",
+            'sep_left = { open = "", close = "" }',
+            'sep_right = { open = "", close = "" }',
+            f"perm_type = {style(fg=function)}",
+            f"perm_read = {style(fg=kind)}",
+            f"perm_write = {style(fg=keyword)}",
+            f"perm_exec = {style(fg=string)}",
+            f"progress_normal = {style(fg=function, bg=surface)}",
+            f"progress_error = {style(fg=keyword, bg=surface)}",
+            "",
+            "[which]",
+            f"mask = {style(bg=bg)}",
+            f"cand = {style(fg=function)}",
+            f"rest = {style(fg=comment)}",
+            f"desc = {style(fg=string)}",
+            f"separator_style = {style(fg=comment)}",
+            "",
+            "[input]",
+            f"border = {style(fg=accent)}",
+            f"selected = {style(fg=on, bg=accent)}",
+            "",
+            "[cmp]",
+            f"border = {style(fg=accent)}",
+            f"active = {style(fg=on, bg=accent, bold=True)}",
+            "",
+            "[notify]",
+            f"title_info = {style(fg=function)}",
+            f"title_warn = {style(fg=kind)}",
+            f"title_error = {style(fg=keyword)}",
+            "",
+            "[filetype]",
+            "rules = [",
+            f"  {{ mime = \"**/image/*\", fg = \"{kind}\" }},",
+            f"  {{ mime = \"**/{{audio,video}}/*\", fg = \"{string}\" }},",
+            f"  {{ mime = \"**/application/{{zip,rar,7z*,tar,gzip,xz,zstd,bzip*,lzma,compress,archive,cpio,arj,xar,ms-cab*}}\", fg = \"{keyword}\" }},",
+            f"  {{ mime = \"**/application/{{pdf,doc,rtf}}\", fg = \"{function}\" }},",
+            f"  {{ url = \"*/\", fg = \"{function}\" }},",
+            "]",
+            "",
+            "[pick]",
+            f"border = {style(fg=accent)}",
+            f"active = {style(fg=string, bold=True)}",
+            "",
+            "[tasks]",
+            f"border = {style(fg=accent)}",
+            f"hovered = {style(fg=string, bold=True)}",
+            "",
+            "[spot]",
+            f"border = {style(fg=accent)}",
+            f"title = {style(fg=accent)}",
+            f"tbl_col = {style(fg=function)}",
+            f"tbl_cell = {style(fg=string, bg=surface)}",
+            "",
+            "[help]",
+            f"border = {style(fg=accent)}",
+            f"chord = {style(fg=function)}",
+            f"hovered = {{ reversed = true, bold = true }}",
+            "",
+            "[icon]",
+            "dirs = [",
+            f"  {{ name = \".config\", text = \"\", fg = \"{string}\" }},",
+            f"  {{ name = \".git\", text = \"\", fg = \"{function}\" }},",
+            f"  {{ name = \".github\", text = \"\", fg = \"{accent}\" }},",
+            f"  {{ name = \"Desktop\", text = \"\", fg = \"{function}\" }},",
+            f"  {{ name = \"Documents\", text = \"\", fg = \"{function}\" }},",
+            f"  {{ name = \"Downloads\", text = \"\", fg = \"{function}\" }},",
+            f"  {{ name = \"Movies\", text = \"\", fg = \"{string}\" }},",
+            f"  {{ name = \"Music\", text = \"\", fg = \"{string}\" }},",
+            f"  {{ name = \"Pictures\", text = \"\", fg = \"{kind}\" }},",
+            f"  {{ name = \"Videos\", text = \"\", fg = \"{string}\" }},",
+            "]",
+            "conds = [",
+            f"  {{ if = \"orphan\", text = \"\", fg = \"{fg}\" }},",
+            f"  {{ if = \"link\", text = \"\", fg = \"{comment}\" }},",
+            f"  {{ if = \"dummy\", text = \"\", fg = \"{keyword}\" }},",
+            f"  {{ if = \"dir & hovered\", text = \"\", fg = \"{accent}\" }},",
+            f"  {{ if = \"dir\", text = \"\", fg = \"{function}\" }},",
+            f"  {{ if = \"exec\", text = \"\", fg = \"{string}\" }},",
+            f"  {{ if = \"!dir\", text = \"\", fg = \"{fg}\" }},",
+            "]",
+            "",
+        ]
+    )
+
+
+def yazi_flavor_name(theme_dir: Path) -> str:
+    return f"omacosy-{theme_dir.name}"
+
+
+def write_yazi(theme_dir: Path, colors: dict[str, str]) -> None:
+    text = render_yazi(colors)
+    name = yazi_flavor_name(theme_dir)
+    flavor = Path.home() / ".config/yazi/flavors" / f"{name}.yazi"
+    flavor.mkdir(parents=True, exist_ok=True)
+    (flavor / "flavor.toml").write_text(text, encoding="utf-8")
+    (flavor / "tmtheme.xml").write_bytes(render_tmtheme(colors))
+    (theme_dir / "yazi.toml").write_text(text, encoding="utf-8")
+    if not _is_current_theme(theme_dir):
+        return
+    dest = Path.home() / ".config/yazi/theme.toml"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        "\n".join(
+            [
+                "# generated by theme-pack; the flavor carries this theme's colors",
+                "[flavor]",
+                f'dark = "{name}"',
+                f'light = "{name}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _vec4(hex_color: str) -> str:
+    r, g, b = hex_to_rgb(hex_color)
+    return f"vec4({r / 255:.4f}, {g / 255:.4f}, {b / 255:.4f}, 1.0)"
+
+
+def _vec3(hex_color: str) -> str:
+    r, g, b = hex_to_rgb(hex_color)
+    return f"vec3({r / 255:.4f}, {g / 255:.4f}, {b / 255:.4f})"
+
+
+def _scale_hex(hex_color: str, factor: float) -> str:
+    r, g, b = hex_to_rgb(hex_color)
+    return "#{:02x}{:02x}{:02x}".format(*(max(0, min(255, int(c * factor))) for c in (r, g, b)))
+
+
+def _replace_marked(text: str, marker: str, line: str) -> str:
+    out = []
+    found = False
+    for raw in text.splitlines():
+        if marker in raw:
+            indent = raw[: len(raw) - len(raw.lstrip())]
+            out.append(f"{indent}{line}")
+            found = True
+        else:
+            out.append(raw)
+    if not found:
+        raise RuntimeError(f"cursor template is missing {marker}")
+    return "\n".join(out) + "\n"
+
+
+def write_cursor_stack(theme_dir: Path, colors: dict[str, str]) -> list[Path]:
+    """Four playground shaders, each tinted with one color from this theme.
+
+    Bottom to top: frozen, tapered blaze, smear gradient, sparks.
+    The colors are the theme's own function, string, keyword, and type.
+    A long cursor jump extends those trails to the screen edge.
+    """
+    roles = _paint_roles(colors)
+    share = Path(__file__).resolve().parent.parent / "share" / "cursor"
+    paths: list[Path] = []
+    layers = (
+        ("cursor_frozen.glsl", "cursor-frozen.glsl", roles["function"]),
+        ("cursor_blaze_tapered.glsl", "cursor-blaze-tapered.glsl", roles["string"]),
+        ("cursor_smear_gradient.glsl", "cursor-smear-gradient.glsl", roles["keyword"]),
+        ("sparks.glsl", "cursor-sparks.glsl", roles["type"]),
+    )
+    for source_name, dest_name, color in layers:
+        text = (share / source_name).read_text(encoding="utf-8")
+        if source_name == "cursor_smear_gradient.glsl":
+            light = mix_hex(color, "#ffffff", 0.42)
+            dark = _scale_hex(color, 0.62)
+            text = _replace_marked(text, "omacosy-gradient-0", f"{_vec3(light)}, // omacosy-gradient-0")
+            text = _replace_marked(text, "omacosy-gradient-1", f"{_vec3(color)}, // omacosy-gradient-1")
+            text = _replace_marked(text, "omacosy-gradient-2", f"{_vec3(dark)} // omacosy-gradient-2")
+        elif source_name == "sparks.glsl":
+            text = _replace_marked(
+                text,
+                "omacosy-sparks",
+                f"vec3 base_color = {_vec3(color)}; // omacosy-sparks",
+            )
+        else:
+            text = _replace_marked(text, "omacosy-body", f"const vec4 TRAIL_COLOR = {_vec4(color)}; // omacosy-body")
+            text = _replace_marked(
+                text,
+                "omacosy-edge",
+                f"const vec4 TRAIL_COLOR_ACCENT = {_vec4(_scale_hex(color, 0.55))}; // omacosy-edge",
+            )
+        dest = theme_dir / dest_name
+        dest.write_text(text, encoding="utf-8")
+        paths.append(dest)
+    return paths
+
+
+def patch_ghostty_cursor(text: str, shader_paths: list[Path]) -> str:
+    """Swap the cursor block in an existing theme ghostty.conf."""
+    out: list[str] = []
+    inserted = False
+    saw_thickness = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("cursor-style-blink"):
+            out.append(line)
+            if not saw_thickness:
+                out.append("adjust-cursor-thickness = -50%")
+                saw_thickness = True
+            continue
+        if stripped.startswith("cursor-style"):
+            out.append("cursor-style = bar")
+            continue
+        if stripped.startswith("adjust-cursor-thickness"):
+            continue
+        if stripped.startswith("custom-shader"):
+            if not inserted:
+                out.extend(f"custom-shader = {path}" for path in shader_paths)
+                inserted = True
+            continue
+        if stripped.startswith("# cursor stack"):
+            continue
+        out.append(line)
+    if not inserted:
+        out.extend(f"custom-shader = {path}" for path in shader_paths)
+    return "\n".join(out) + "\n"
+
+
 def write_sidecars(theme_dir: Path, colors: dict[str, str] | None = None) -> dict[str, str]:
     if colors is None:
         colors = normalize(parse_colors(theme_dir / "colors.toml"))
     else:
         colors = normalize(dict(colors))
+    colors = restyle_theme(colors, theme_dir.name)
     accent, bg, fg, muted = colors["accent"], colors["background"], colors["foreground"], colors["muted"]
     (theme_dir / "borders.sh").write_text(
         "#!/usr/bin/env bash\n"
@@ -404,56 +1824,90 @@ def write_sidecars(theme_dir: Path, colors: dict[str, str] | None = None) -> dic
         f"export INACTIVE_COLOR={argb(muted, '99')}\n",
         encoding="utf-8",
     )
+    item_bg = bar_item_bg(colors)
+    accent_bar = _chrome_accent(colors)
+    icon_bar = mix_hex(accent_bar, fg, 0.32)
+    muted_bar = comment_ink(colors)
+    if theme_dir.name == "snow-black":
+        # Waybar in snow_black: black capsules, white active chip,
+        # white glyphs. Inactive marks stay dark so they read on the
+        # light wallpaper.
+        item_bg = "#000000"
+        accent_bar = "#FFFFFF"
+        icon_bar = "#FFFFFF"
+        muted_bar = "#3A4246"
     (theme_dir / "sketchybar.sh").write_text(
         "#!/usr/bin/env bash\n"
         f"export BAR_COLOR={argb(bg, 'e6')}\n"
         f"export BAR_BG_SOLID={argb(bg)}\n"
-        f"export ITEM_BG={argb(colors.get('color8', muted))}\n"
-        f"export ACCENT={argb(accent)}\n"
+        f"export ITEM_BG={argb(item_bg)}\n"
+        f"export ACCENT={argb(accent_bar)}\n"
         f"export LABEL_COLOR={argb(fg)}\n"
-        f"export ICON_COLOR={argb(mix_hex(accent, fg, 0.32))}\n"
-        f"export MUTED={argb(muted)}\n"
-        f"export RED={argb(colors['color1'])}\n"
-        f"export GREEN={argb(colors['color2'])}\n"
-        f"export YELLOW={argb(colors['color3'])}\n",
+        f"export ICON_COLOR={argb(icon_bar)}\n"
+        f"export MUTED={argb(muted_bar)}\n"
+        f"export RED={argb(punch_on(colors['color1'], bg))}\n"
+        f"export GREEN={argb(punch_on(colors['color2'], bg))}\n"
+        f"export YELLOW={argb(punch_on(colors['color3'], bg))}\n",
         encoding="utf-8",
     )
-    pal = "\n".join(f"palette = {i}={colors[f'color{i}']}" for i in range(16))
-    (theme_dir / "ghostty.conf").write_text(
-        f"font-family = {FONT}\n"
-        f"font-family = {FONT_FALLBACK}\n"
-        f"font-size = 14\n"
-        f"background = {bg.lstrip('#')}\n"
-        f"foreground = {fg.lstrip('#')}\n"
-        f"cursor-color = {accent.lstrip('#')}\n"
-        f"cursor-text = {bg.lstrip('#')}\n"
-        f"selection-background = {colors['selection_background'].lstrip('#')}\n"
-        f"selection-foreground = {colors['selection_foreground'].lstrip('#')}\n"
-        "macos-icon = custom-style\n"
-        f"macos-icon-ghost-color = {accent.lstrip('#')}\n"
-        f"macos-icon-screen-color = {bg.lstrip('#')}\n"
-        f"{pal}\n",
-        encoding="utf-8",
-    )
+    ink = ansi_palette(colors)
+    vivid = _paint_roles(colors)["accent"]
+    sel = colors.get("_theme_selection") or colors["selection_background"]
+    sel_fg = colors.get("selection_foreground") or text_on(sel, colors)
+    authored_cursor = colors.get("cursor")
+    if (
+        authored_cursor
+        and _hsv_of(authored_cursor)[1] >= 0.25
+        and abs(luminance(authored_cursor) - luminance(bg)) >= 0.22
+    ):
+        cursor = authored_cursor
+    else:
+        cursor = vivid
+    cursor_fg = text_on(cursor, colors)
+    split = comment_ink(colors)
+    ghost = [
+        f"font-family = {FONT}",
+        f"font-family = {FONT_FALLBACK}",
+        "font-size = 14",
+        f"background = {bg.lstrip('#')}",
+        f"foreground = {fg.lstrip('#')}",
+        "cursor-style = bar",
+        "cursor-style-blink = false",
+        "adjust-cursor-thickness = -50%",
+        f"cursor-color = {cursor.lstrip('#')}",
+        *[f"custom-shader = {path}" for path in write_cursor_stack(theme_dir, colors)],
+        f"cursor-text = {cursor_fg.lstrip('#')}",
+        f"selection-background = {sel.lstrip('#')}",
+        f"selection-foreground = {sel_fg.lstrip('#')}",
+        "background-opacity = 0.9",
+        "background-blur = true",
+        "window-padding-x = 8",
+        "window-padding-y = 6",
+        "minimum-contrast = 1",
+        f"split-divider-color = {split.lstrip('#')}",
+        f"unfocused-split-fill = {mix_hex(bg, vivid, 0.28).lstrip('#')}",
+        "unfocused-split-opacity = 0.92",
+        "macos-icon = custom-style",
+        f"macos-icon-ghost-color = {vivid.lstrip('#')}",
+        f"macos-icon-screen-color = {bg.lstrip('#')}",
+    ]
+    ghost.extend(f"palette = {i}={swatch.lstrip('#')}" for i, swatch in enumerate(palette_256(colors)))
+    (theme_dir / "ghostty.conf").write_text("\n".join(ghost) + "\n", encoding="utf-8")
+    normal = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
     (theme_dir / "alacritty.toml").write_text(
         "[colors.primary]\n"
         f'background = "{bg}"\n'
         f'foreground = "{fg}"\n'
         "[colors.cursor]\n"
-        f'cursor = "{colors["cursor"]}"\n'
+        f'cursor = "{cursor}"\n'
+        f'text = "{cursor_fg}"\n'
         "[colors.selection]\n"
-        f'background = "{colors["selection_background"]}"\n'
-        f'text = "{colors["selection_foreground"]}"\n'
+        f'background = "{sel}"\n'
+        f'text = "{sel_fg}"\n'
         "[colors.normal]\n"
-        + "\n".join(
-            f'{name} = "{colors[f"color{i}"]}"'
-            for i, name in enumerate(["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"])
-        )
+        + "\n".join(f'{name} = "{ink[i]}"' for i, name in enumerate(normal))
         + "\n[colors.bright]\n"
-        + "\n".join(
-            f'{name} = "{colors[f"color{i+8}"]}"'
-            for i, name in enumerate(["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"])
-        )
+        + "\n".join(f'{name} = "{ink[i + 8]}"' for i, name in enumerate(normal))
         + "\n",
         encoding="utf-8",
     )
@@ -461,11 +1915,12 @@ def write_sidecars(theme_dir: Path, colors: dict[str, str] | None = None) -> dic
         f"font_family      {FONT}",
         f"background       {bg}",
         f"foreground       {fg}",
-        f"cursor           {colors['cursor']}",
-        f"selection_background {colors['selection_background']}",
-        f"selection_foreground {colors['selection_foreground']}",
+        f"cursor           {cursor}",
+        f"cursor_text_color {cursor_fg}",
+        f"selection_background {sel}",
+        f"selection_foreground {sel_fg}",
     ]
-    kitty.extend(f"color{i} {colors[f'color{i}']}" for i in range(16))
+    kitty.extend(f"color{i} {ink[i]}" for i in range(16))
     (theme_dir / "kitty.conf").write_text("\n".join(kitty) + "\n", encoding="utf-8")
     (theme_dir / "starship.toml").write_text(render_starship(colors), encoding="utf-8")
     (theme_dir / "shell.env").write_text(render_shell_env(colors), encoding="utf-8")
@@ -473,6 +1928,10 @@ def write_sidecars(theme_dir: Path, colors: dict[str, str] | None = None) -> dic
     (theme_dir / "bat.tmTheme").write_bytes(render_tmtheme(colors))
     if not ((theme_dir / "lock.png").is_file() and (theme_dir / "lock.png").stat().st_size > 80_000):
         generate_lock_ui(theme_dir, colors)
+    (theme_dir / "neovim.lua").write_text(render_neovim(colors), encoding="utf-8")
+    ensure_nvim_init()
+    write_herdr(theme_dir, colors)
+    write_yazi(theme_dir, colors)
     return colors
 
 
@@ -623,39 +2082,160 @@ def write_editor_settings(path: Path, colors: dict[str, str]) -> None:
     data["workbench.preferredLightColorTheme"] = "Quiet Light"
     data["workbench.colorTheme"] = "Visual Studio Dark" if dark else "Quiet Light"
     data["workbench.colorCustomizations"] = _cursor_colors(colors)
+    data["editor.tokenColorCustomizations"] = _token_colors(colors)
+    data["editor.semanticTokenColorCustomizations"] = {"rules": _semantic_colors(colors)}
     data["editor.fontFamily"] = f"'{FONT}', '{FONT_FALLBACK}', Menlo, monospace"
     data["editor.fontLigatures"] = False
     path.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
 
 
+def _chrome_accent(colors: dict[str, str]) -> str:
+    accent = colors["accent"]
+    if abs(luminance(accent) - luminance(colors["background"])) < 0.16:
+        return punch_on(accent, colors["background"])
+    return accent
+
+
 def _cursor_colors(colors: dict[str, str]) -> dict[str, str]:
+    ink = ansi_palette(colors)
+    bg, fg = colors["background"], colors["foreground"]
+    accent = _chrome_accent(colors)
+    # Editor text stays the foreground color, so the selection wash has to
+    # contrast with that, not with a second color the editor will not use.
+    sel = contrasting_bg(fg, colors["selection_background"])
+    comment = comment_ink(colors)
+    panel = mix_hex(bg, fg, 0.05)
+    names = ("Black", "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan", "White")
+    chrome = {
+        "editor.background": bg,
+        "editor.foreground": fg,
+        "editor.selectionBackground": sel + "aa",
+        "editor.inactiveSelectionBackground": sel + "55",
+        "editor.lineHighlightBackground": mix_hex(bg, sel, 0.28),
+        "editorCursor.foreground": colors["cursor"] if abs(luminance(colors["cursor"]) - luminance(bg)) >= 0.25 else fg,
+        "editorLineNumber.foreground": comment,
+        "editorLineNumber.activeForeground": accent,
+        "editorWidget.background": panel,
+        "editorWidget.border": comment,
+        "editorSuggestWidget.background": panel,
+        "editorSuggestWidget.foreground": fg,
+        "editorSuggestWidget.selectedBackground": sel,
+        "editorSuggestWidget.highlightForeground": ink[3],
+        "editor.findMatchBackground": ink[3] + "66",
+        "editor.findMatchHighlightBackground": ink[3] + "33",
+        "editorGutter.addedBackground": ink[2],
+        "editorGutter.modifiedBackground": ink[3],
+        "editorGutter.deletedBackground": ink[1],
+        "sideBar.background": ink[0],
+        "sideBar.foreground": fg,
+        "sideBarSectionHeader.background": panel,
+        "activityBar.background": ink[0],
+        "activityBar.foreground": accent,
+        "activityBar.inactiveForeground": comment,
+        "statusBar.background": ink[0],
+        "statusBar.foreground": fg,
+        "statusBar.noFolderBackground": ink[0],
+        "statusBar.noFolderForeground": fg,
+        "statusBar.debuggingBackground": ink[1],
+        "titleBar.activeBackground": ink[0],
+        "titleBar.activeForeground": fg,
+        "titleBar.inactiveBackground": bg,
+        "titleBar.inactiveForeground": comment,
+        "tab.activeBackground": bg,
+        "tab.activeForeground": fg,
+        "tab.inactiveBackground": ink[0],
+        "tab.inactiveForeground": comment,
+        "tab.activeBorder": accent,
+        "tab.activeBorderTop": accent,
+        "focusBorder": accent,
+        "button.background": accent,
+        "button.foreground": text_on(accent, colors),
+        "input.background": panel,
+        "input.foreground": fg,
+        "input.placeholderForeground": comment,
+        "dropdown.background": panel,
+        "panel.background": ink[0],
+        "panel.border": comment,
+        "list.activeSelectionBackground": sel,
+        "list.activeSelectionForeground": text_on(sel, colors),
+        "list.hoverBackground": mix_hex(bg, sel, 0.4),
+        "list.inactiveSelectionBackground": sel + "66",
+        "gitDecoration.addedResourceForeground": ink[2],
+        "gitDecoration.modifiedResourceForeground": ink[3],
+        "gitDecoration.deletedResourceForeground": ink[1],
+        "gitDecoration.untrackedResourceForeground": ink[6],
+        "peekView.border": accent,
+        "peekViewResult.selectionBackground": sel,
+        "breadcrumb.foreground": comment,
+        "breadcrumb.focusForeground": fg,
+        "terminal.background": bg,
+        "terminal.foreground": fg,
+        "terminalCursor.foreground": accent,
+    }
+    for i, name in enumerate(names):
+        chrome[f"terminal.ansi{name}"] = ink[i]
+        chrome[f"terminal.ansiBright{name}"] = ink[i + 8]
+    return chrome
+
+
+def _token_colors(colors: dict[str, str]) -> dict[str, object]:
+    ink = syntax_inks(colors)
+    rules = []
+    for scope, key, style in SYNTAX_SCOPES:
+        settings: dict[str, str] = {"foreground": ink[key]}
+        if style:
+            settings["fontStyle"] = style
+        rules.append({"scope": scope, "settings": settings})
     return {
-        "editor.background": colors["background"],
-        "editor.foreground": colors["foreground"],
-        "editor.selectionBackground": colors["selection_background"] + "99",
-        "editorCursor.foreground": colors["cursor"],
-        "sideBar.background": colors.get("color0", colors["background"]),
-        "sideBar.foreground": colors["foreground"],
-        "activityBar.background": colors.get("color0", colors["background"]),
-        "activityBar.foreground": colors["accent"],
-        "statusBar.background": colors.get("color0", colors["background"]),
-        "statusBar.foreground": colors["foreground"],
-        "titleBar.activeBackground": colors.get("color0", colors["background"]),
-        "titleBar.activeForeground": colors["foreground"],
-        "tab.activeBackground": colors["background"],
-        "tab.inactiveBackground": colors.get("color0", colors["background"]),
-        "focusBorder": colors["accent"],
-        "list.activeSelectionBackground": colors["accent"] + "55",
+        "comments": ink["comment"],
+        "strings": ink["string"],
+        "keywords": ink["keyword"],
+        "numbers": ink["number"],
+        "functions": ink["function"],
+        "types": ink["type"],
+        "variables": ink["variable"],
+        "textMateRules": rules,
     }
 
 
+def _semantic_colors(colors: dict[str, str]) -> dict[str, str | dict[str, str]]:
+    ink = syntax_inks(colors)
+    mapping = {
+        "comment": "comment",
+        "string": "string",
+        "keyword": "keyword",
+        "number": "number",
+        "function": "function",
+        "method": "method",
+        "variable": "variable",
+        "parameter": "parameter",
+        "property": "property",
+        "type": "type",
+        "class": "class",
+        "namespace": "namespace",
+        "enum": "type",
+        "macro": "decorator",
+        "operator": "operator",
+        "decorator": "decorator",
+        "regexp": "regexp",
+    }
+    rules: dict[str, str | dict[str, str]] = {}
+    for name, key in mapping.items():
+        rules[name] = {"foreground": ink[key], "fontStyle": "italic"} if name == "comment" else ink[key]
+    return rules
+
+
 def render_shell_env(colors: dict[str, str]) -> str:
-    fg, bg, acc, muted = colors["foreground"], colors["background"], colors["accent"], colors["muted"]
-    c1, c2, c3, c4, c5, c6 = (colors[f"color{i}"] for i in (1, 2, 3, 4, 5, 6))
+    ink = ansi_palette(colors)
+    fg, bg = colors["foreground"], colors["background"]
+    c1, c2, c3, c4, c5, c6 = ink[1], ink[2], ink[3], ink[4], ink[5], ink[6]
+    comment = comment_ink(colors)
     sel = colors["selection_background"]
+    sel_fg = text_on(sel, colors)
+    hl = c3 if color_distance(c3, sel) >= 48 else c1
     eza = ":".join(
         [
-            f"di={rgb_ansi(acc)}",
+            f"di={rgb_ansi(c4)}",
             f"ex={rgb_ansi(c2)}",
             f"ln={rgb_ansi(c6)}",
             f"or={rgb_ansi(c1)}",
@@ -664,14 +2244,14 @@ def render_shell_env(colors: dict[str, str]) -> str:
             f"so={rgb_ansi(c5)}",
             f"bd={rgb_ansi(c4)}",
             f"cd={rgb_ansi(c6)}",
-            f"sn={rgb_ansi(muted)}",
-            f"sb={rgb_ansi(muted)}",
-            f"da={rgb_ansi(muted)}",
-            f"uu={rgb_ansi(acc)}",
-            f"un={rgb_ansi(muted)}",
+            f"sn={rgb_ansi(comment)}",
+            f"sb={rgb_ansi(comment)}",
+            f"da={rgb_ansi(comment)}",
+            f"uu={rgb_ansi(c4)}",
+            f"un={rgb_ansi(comment)}",
             f"gu={rgb_ansi(c2)}",
-            f"gn={rgb_ansi(muted)}",
-            f"hd={rgb_ansi(acc)}",
+            f"gn={rgb_ansi(comment)}",
+            f"hd={rgb_ansi(c4)}",
             f"im={rgb_ansi(c5)}",
             f"vi={rgb_ansi(c4)}",
             f"mu={rgb_ansi(c3)}",
@@ -680,14 +2260,14 @@ def render_shell_env(colors: dict[str, str]) -> str:
             f"do={rgb_ansi(fg)}",
             f"co={rgb_ansi(c3)}",
             f"sc={rgb_ansi(c6)}",
-            f"tm={rgb_ansi(muted)}",
-            f"cm={rgb_ansi(muted)}",
+            f"tm={rgb_ansi(comment)}",
+            f"cm={rgb_ansi(comment)}",
             f"bu={rgb_ansi(c1)}",
         ]
     )
     ls = ":".join(
         [
-            f"di={rgb_ansi(acc)}",
+            f"di={rgb_ansi(c4)}",
             f"ln={rgb_ansi(c6)}",
             f"ex={rgb_ansi(c2)}",
             f"or={rgb_ansi(c1)}",
@@ -695,21 +2275,33 @@ def render_shell_env(colors: dict[str, str]) -> str:
             f"so={rgb_ansi(c5)}",
             f"bd={rgb_ansi(c4)}",
             f"cd={rgb_ansi(c6)}",
-            f"*.md={rgb_ansi(fg)}",
+            f"*.md={rgb_ansi(c6)}",
             f"*.py={rgb_ansi(c3)}",
             f"*.rs={rgb_ansi(c1)}",
             f"*.go={rgb_ansi(c6)}",
             f"*.js={rgb_ansi(c3)}",
             f"*.ts={rgb_ansi(c4)}",
-            f"*.json={rgb_ansi(muted)}",
+            f"*.json={rgb_ansi(c5)}",
+            f"*.toml={rgb_ansi(c5)}",
+            f"*.yml={rgb_ansi(c5)}",
+            f"*.yaml={rgb_ansi(c5)}",
+            f"*.sh={rgb_ansi(c2)}",
+            f"*.zsh={rgb_ansi(c2)}",
+            f"*.swift={rgb_ansi(c1)}",
+            f"*.c={rgb_ansi(c4)}",
+            f"*.h={rgb_ansi(c6)}",
+            f"*.cpp={rgb_ansi(c4)}",
+            f"*.rb={rgb_ansi(c1)}",
+            f"*.lua={rgb_ansi(c4)}",
         ]
     )
+    border = comment if color_distance(comment, bg) >= 28 else c6
     fzf = (
-        f"--color=fg:{fg},bg:{bg},hl:{acc},"
-        f"fg+:{fg},bg+:{sel},hl+:{acc},"
-        f"info:{c3},prompt:{acc},pointer:{acc},"
-        f"marker:{c2},spinner:{c6},header:{acc},"
-        f"border:{muted},gutter:{bg}"
+        f"--color=fg:{fg},bg:{bg},hl:{c3},"
+        f"fg+:{sel_fg},bg+:{sel},hl+:{hl},"
+        f"info:{c3},prompt:{c4},pointer:{c2},"
+        f"marker:{c2},spinner:{c6},header:{c4},"
+        f"border:{border},gutter:{bg},query:{fg}"
     )
     return (
         "# generated by theme-pack — sourced from zshrc\n"
@@ -717,20 +2309,31 @@ def render_shell_env(colors: dict[str, str]) -> str:
         f"export FZF_DEFAULT_OPTS='{fzf}'\n"
         f"export EZA_COLORS='{eza}'\n"
         f"export LS_COLORS='{ls}'\n"
+        "# Herdr does not answer Neovim's underline probe. Ghostty's TERM\n"
+        "# skips that probe, so colored underlines survive inside a pane.\n"
+        'if [[ -n ${HERDR_ENV:-} ]]; then\n'
+        '  nvim() { TERM=xterm-ghostty command nvim "$@"; }\n'
+        "fi\n"
     )
 
 
 def render_btop(colors: dict[str, str]) -> str:
-    bg, fg, acc, muted = colors["background"], colors["foreground"], colors["accent"], colors["muted"]
-    c1, c2, c3, c4, c6 = colors["color1"], colors["color2"], colors["color3"], colors["color4"], colors["color6"]
+    bg, fg = colors["background"], colors["foreground"]
+    acc = _chrome_accent(colors)
+    paints = _surface_colors(colors)
+    def at(index: int) -> str:
+        return paints[index % len(paints)]
+    c1, c2, c3, c4, c6 = at(2), at(0), at(1), at(3), at(4 % len(paints))
+    muted = comment_ink(colors)
+    sel = colors["selection_background"]
     return (
         "# generated by theme-pack from the active omacosy theme\n"
         f'theme[main_bg]="{bg}"\n'
         f'theme[main_fg]="{fg}"\n'
         f'theme[title]="{fg}"\n'
         f'theme[hi_fg]="{acc}"\n'
-        f'theme[selected_bg]="{colors["selection_background"]}"\n'
-        f'theme[selected_fg]="{fg}"\n'
+        f'theme[selected_bg]="{sel}"\n'
+        f'theme[selected_fg]="{text_on(sel, colors)}"\n'
         f'theme[inactive_fg]="{muted}"\n'
         f'theme[proc_misc]="{acc}"\n'
         f'theme[cpu_box]="{acc}"\n'
@@ -759,7 +2362,7 @@ def render_btop(colors: dict[str, str]) -> str:
         f'theme[download_start]="{c4}"\n'
         f'theme[download_mid]="{c6}"\n'
         f'theme[download_end]="{c2}"\n'
-        f'theme[upload_start]="{colors["color5"]}"\n'
+        f'theme[upload_start]="{c6}"\n'
         f'theme[upload_mid]="{c1}"\n'
         f'theme[upload_end]="{c3}"\n'
         f'theme[process_start]="{c2}"\n'
@@ -769,31 +2372,26 @@ def render_btop(colors: dict[str, str]) -> str:
 
 
 def render_tmtheme(colors: dict[str, str]) -> bytes:
-    bg, fg, acc, muted = colors["background"], colors["foreground"], colors["accent"], colors["muted"]
-    settings = [
+    ink = syntax_inks(colors)
+    bg, fg = colors["background"], colors["foreground"]
+    sel = contrasting_bg(fg, colors["selection_background"])
+    settings: list[dict[str, object]] = [
         {
             "settings": {
                 "background": bg,
                 "foreground": fg,
-                "caret": acc,
-                "lineHighlight": colors.get("lighter_background", muted),
-                "selection": colors["selection_background"],
-                "invisibles": muted,
+                "caret": _chrome_accent(colors),
+                "lineHighlight": mix_hex(bg, sel, 0.35),
+                "selection": sel,
+                "invisibles": comment_ink(colors),
             }
-        },
-        {"name": "Comment", "scope": "comment", "settings": {"foreground": muted}},
-        {"name": "String", "scope": "string", "settings": {"foreground": colors["color2"]}},
-        {"name": "Number", "scope": "constant.numeric", "settings": {"foreground": colors["color3"]}},
-        {"name": "Keyword", "scope": "keyword, storage", "settings": {"foreground": colors["color1"]}},
-        {"name": "Function", "scope": "entity.name.function, support.function", "settings": {"foreground": colors["color4"]}},
-        {"name": "Class", "scope": "entity.name.class, entity.name.type", "settings": {"foreground": colors["color3"]}},
-        {"name": "Variable", "scope": "variable", "settings": {"foreground": fg}},
-        {"name": "Constant", "scope": "constant", "settings": {"foreground": colors["color5"]}},
-        {"name": "Type", "scope": "storage.type", "settings": {"foreground": colors["color6"]}},
-        {"name": "Invalid", "scope": "invalid", "settings": {"foreground": colors["color1"]}},
-        {"name": "Tag", "scope": "entity.name.tag", "settings": {"foreground": colors["color1"]}},
-        {"name": "Attribute", "scope": "entity.other.attribute-name", "settings": {"foreground": colors["color3"]}},
+        }
     ]
+    for scope, key, style in SYNTAX_SCOPES:
+        rule: dict[str, str] = {"foreground": ink[key]}
+        if style:
+            rule["fontStyle"] = style
+        settings.append({"name": scope, "scope": scope, "settings": rule})
     data = {
         "name": "omacosy",
         "uuid": "a7c0e5d2-4b11-4f3a-9d8e-0c05b0c05b01",
@@ -837,50 +2435,68 @@ def write_bat(colors: dict[str, str]) -> None:
 
 
 def write_lazygit(colors: dict[str, str]) -> None:
-    acc, fg, muted = colors["accent"], colors["foreground"], colors["muted"]
+    ink = ansi_palette(colors)
+    fg = colors["foreground"]
+    acc = _chrome_accent(colors)
+    # lazygit paints the selected row with defaultFgColor, so the bar has
+    # to be the color that contrasts with that text.
+    sel = contrasting_bg(fg, colors["selection_background"])
+    inactive = mix_hex(colors["background"], sel, 0.55)
+    comment = comment_ink(colors)
     block = (
         "gui:\n"
         "  theme:\n"
         f'    activeBorderColor:\n      - "{acc}"\n      - bold\n'
-        f'    inactiveBorderColor:\n      - "{muted}"\n'
-        f'    searchingActiveBorderColor:\n      - "{colors["color3"]}"\n'
-        f'    optionsTextColor:\n      - "{acc}"\n'
-        f'    selectedLineBgColor:\n      - "{colors["selection_background"]}"\n'
-        f'    cherryPickedCommitBgColor:\n      - "{muted}"\n'
-        f'    cherryPickedCommitFgColor:\n      - "{acc}"\n'
-        f'    unstagedChangesColor:\n      - "{colors["color1"]}"\n'
+        f'    inactiveBorderColor:\n      - "{comment}"\n'
+        f'    searchingActiveBorderColor:\n      - "{ink[3]}"\n      - bold\n'
+        f'    optionsTextColor:\n      - "{ink[3]}"\n'
+        f'    selectedLineBgColor:\n      - "{sel}"\n'
+        f'    inactiveViewSelectedLineBgColor:\n      - "{inactive}"\n'
+        f'    cherryPickedCommitBgColor:\n      - "{comment}"\n'
+        f'    cherryPickedCommitFgColor:\n      - "{ink[2]}"\n'
+        f'    markedBaseCommitBgColor:\n      - "{ink[4]}"\n'
+        f'    markedBaseCommitFgColor:\n      - "{text_on(ink[4], colors)}"\n'
+        f'    unstagedChangesColor:\n      - "{ink[1]}"\n'
         f'    defaultFgColor:\n      - "{fg}"\n'
+        "git:\n"
+        "  paging:\n"
+        "    colorArg: always\n"
+        "    pager: delta --paging=never --line-numbers\n"
     )
     LAZYGIT.parent.mkdir(parents=True, exist_ok=True)
-    if not LAZYGIT.is_file():
-        LAZYGIT.write_text(block, encoding="utf-8")
-        return
-    raw = LAZYGIT.read_text(encoding="utf-8")
-    if re.search(r"(?m)^gui:\s*$", raw) and "theme:" in raw:
-        updated = re.sub(r"(?ms)^gui:\n(?:  .*\n)*", block, raw, count=1)
-        LAZYGIT.write_text(updated, encoding="utf-8")
-    else:
-        LAZYGIT.write_text(block + raw, encoding="utf-8")
+    raw = LAZYGIT.read_text(encoding="utf-8") if LAZYGIT.is_file() else ""
+    raw = re.sub(r"(?ms)^gui:\n(?:[ \t].*\n)*", "", raw)
+    raw = re.sub(r"(?ms)^git:\n(?:[ \t].*\n)*", "", raw).strip()
+    text = block if not raw else block + "\n" + raw + "\n"
+    LAZYGIT.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
 
 
 def write_delta(colors: dict[str, str]) -> None:
-    bg, acc = colors["background"], colors["accent"]
-    plus = mix_hex(bg, colors["color2"], 0.22)
-    minus = mix_hex(bg, colors["color1"], 0.22)
-    plus_e = mix_hex(bg, colors["color2"], 0.38)
-    minus_e = mix_hex(bg, colors["color1"], 0.38)
+    ink = ansi_palette(colors)
+    bg, acc = colors["background"], _chrome_accent(colors)
+    plus_ink = ink[2]
+    plus = mix_hex(bg, plus_ink, 0.5)
+    minus = mix_hex(bg, ink[1], 0.5)
+    plus_e = mix_hex(bg, plus_ink, 0.78)
+    minus_e = mix_hex(bg, ink[1], 0.78)
     text = (
         "[delta]\n"
         "    syntax-theme = omacosy\n"
+        "    line-numbers = true\n"
+        "    navigate = true\n"
         f'    plus-style = "syntax {plus}"\n'
         f'    minus-style = "syntax {minus}"\n'
         f'    plus-emph-style = "syntax {plus_e}"\n'
         f'    minus-emph-style = "syntax {minus_e}"\n'
-        f'    line-numbers-minus-style = "{colors["color1"]}"\n'
-        f'    line-numbers-plus-style = "{colors["color2"]}"\n'
-        f'    line-numbers-zero-style = "{colors["muted"]}"\n'
+        f'    line-numbers-minus-style = "{ink[1]}"\n'
+        f'    line-numbers-plus-style = "{plus_ink}"\n'
+        f'    line-numbers-zero-style = "{comment_ink(colors)}"\n'
+        f'    file-style = "bold {acc}"\n'
+        f'    file-decoration-style = "{acc} ul"\n'
         '    hunk-header-style = "syntax bold"\n'
-        f'    hunk-header-decoration-style = "{acc} ul"\n'
+        f'    hunk-header-decoration-style = "{acc} box"\n'
+        f'    commit-style = "bold {ink[3]}"\n'
+        f'    commit-decoration-style = "{ink[3]} box"\n'
     )
     DELTA_GIT.parent.mkdir(parents=True, exist_ok=True)
     DELTA_GIT.write_text(text, encoding="utf-8")
@@ -1113,14 +2729,67 @@ def set_desktop_then_lock(desktop: Path, lock_image: Path) -> None:
     set_desktop_image(desktop)
 
 
+def seal_idle_image(lock_image: Path) -> None:
+    """Point the lock screen at a still image.
+
+    Desktop entries stay untouched, and WallpaperAgent is not restarted.
+    """
+    if not STORE.is_file() or not lock_image.is_file():
+        return
+    try:
+        data = plistlib.loads(STORE.read_bytes())
+    except Exception:
+        return
+    config = _first_desktop_config(data)
+    lock_url = lock_image.resolve().as_uri()
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            idle = node.get("Idle")
+            desktop = node.get("Desktop")
+            if isinstance(idle, dict):
+                encoded = None
+                if isinstance(desktop, dict):
+                    content = desktop.get("Content")
+                    if isinstance(content, dict):
+                        encoded = content.get("EncodedOptionValues")
+                content = idle.setdefault("Content", {})
+                choices = content.setdefault("Choices", [{}])
+                if not choices or not isinstance(choices[0], dict):
+                    choices[:] = [{}]
+                choices[0]["Provider"] = "com.apple.wallpaper.choice.image"
+                choices[0]["Files"] = [{"relative": lock_url}]
+                if config:
+                    choices[0]["Configuration"] = config
+                if encoded:
+                    content["EncodedOptionValues"] = encoded
+                idle["LastSet"] = now
+                idle["LastUse"] = now
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    try:
+        STORE.write_bytes(plistlib.dumps(data, fmt=plistlib.FMT_BINARY))
+    except Exception:
+        pass
+
+
 def apply_lock_and_saver(theme_dir: Path, wallpaper: Path | None = None, colors: dict[str, str] | None = None) -> None:
-    del colors
     walls = real_backgrounds(theme_dir)
     desktop = wallpaper if wallpaper and wallpaper.is_file() else (walls[0] if walls else None)
     if desktop and (is_lock_art(desktop) or desktop.name.lower() in {"lock.png", "lock-ui.png"}):
         desktop = walls[0] if walls else None
     if desktop:
         set_desktop_image(desktop)
+    if theme_dir.name in LOCK_IMAGE_THEMES:
+        lock_image = resolve_lock(theme_dir, colors)
+        if lock_image is not None:
+            seal_idle_image(lock_image)
     # Ghostty + ttfx is the screensaver for every theme. Theme switches
     # must not revive the system .saver or Ken Burns idle timer.
     subprocess.run(
@@ -1391,6 +3060,13 @@ def apply_macos(colors: dict[str, str]) -> None:
     ghostty = Path("/Applications/Ghostty.app/Contents/MacOS/ghostty")
     if ghostty.is_file():
         subprocess.run([str(ghostty), "+reload-config"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # The overview samples its border colour once, at startup. A theme
+    # change has to drop that process so the next swipe reads the new one.
+    overview_pid = Path.home() / ".local/state/omacosy/overview.pid"
+    if overview_pid.is_file():
+        pid = overview_pid.read_text(encoding="utf-8").strip()
+        if pid.isdigit():
+            subprocess.run(["kill", pid], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     sync_global_preferences()
     post_chrome_notifications(appearance=appearance_changed)
     flush_distributed_notifications()
@@ -1433,11 +3109,18 @@ def apply(theme_dir: Path, wallpaper: Path | None = None, color_mode: str | None
         save_color_mode(theme_dir, color_mode)
     else:
         color_mode = load_color_mode(theme_dir)
-    colors = apply_color_mode(base, wallpaper, color_mode)
+    colors = restyle_theme(apply_color_mode(base, wallpaper, color_mode), theme_dir.name)
     write_sidecars(theme_dir, colors)
     if theme_dir.name in IME_BLUE_THEMES:
         colors["_apple_accent"] = "4"
         colors["_ime_highlight"] = APPLE_HEX[4]
+    if theme_dir.name == "snow-black":
+        # Finder, Safari, and Preview only accept a system accent.
+        # Graphite is the gray one. The candidate bar can take the
+        # theme's own light gray, which is brighter than graphite.
+        # Wallpaper sampling would otherwise hand Finder the green of the eyes.
+        colors["_apple_accent"] = "-1"
+        colors["_ime_highlight"] = "#C8CECE"
     apply_macos(colors)
     write_typora(colors)
     write_textedit(colors)

@@ -1,0 +1,79 @@
+#!/bin/zsh
+# Ghostty runs this instead of a bare shell. Herdr is the window;
+# the first launch of a single-pane session opens Neovim beside it.
+HERDR=/opt/homebrew/bin/herdr
+ROOT="$HOME/.local/share/omacosy"
+LOCK="/tmp/omacosy-studio-layout-$(id -u).lock.d"
+LOG="/tmp/omacosy-studio.log"
+
+pane_id() {
+  /usr/bin/python3 -c '
+import json, sys
+raw = sys.stdin.read()
+start = raw.find("{")
+if start < 0:
+    sys.exit(1)
+data = json.loads(raw[start:])
+node = data.get("result", data)
+if isinstance(node, dict) and "panes" in node:
+    panes = node["panes"]
+elif isinstance(node, dict) and "pane" in node:
+    panes = [node["pane"]]
+else:
+    panes = node if isinstance(node, list) else []
+if not panes:
+    sys.exit(1)
+pane = panes[0]
+print(pane.get("pane_id") or pane.get("id") or "")
+'
+}
+
+layout() {
+  mkdir "$LOCK" 2>/dev/null || return 0
+  trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+  {
+    local i json first second
+    json=""
+    for i in {1..40}; do
+      json=$("$HERDR" pane list 2>/dev/null) || true
+      if [[ "$json" == *pane_id* ]]; then
+        break
+      fi
+      sleep 0.25
+    done
+    sleep 0.5
+    json=$("$HERDR" pane list 2>/dev/null) || exit 0
+    # A restored session already has other workspaces. Lay out only the
+    # focused workspace, and only when that workspace is still one shell.
+    first=$(print -r -- "$json" | /usr/bin/python3 -c '
+import json, sys
+raw = sys.stdin.read()
+start = raw.find("{")
+if start < 0:
+    sys.exit(1)
+panes = json.loads(raw[start:])["result"]["panes"]
+focused = next((p for p in panes if p.get("focused")), None)
+if not focused:
+    sys.exit(1)
+ws = focused["workspace_id"]
+mates = [p for p in panes if p.get("workspace_id") == ws]
+if len(mates) != 1:
+    sys.exit(1)
+print(focused["pane_id"])
+') || exit 0
+    [[ -n "$first" ]] || exit 0
+    second=$("$HERDR" pane split "$first" --direction right --ratio 0.54 --no-focus | pane_id) || exit 0
+    [[ -n "$second" ]] || exit 0
+    "$HERDR" pane run "$second" "$ROOT/bin/omacosy-nvim-demo"
+    "$HERDR" pane rename "$first" shell
+    "$HERDR" pane rename "$second" nvim
+    "$HERDR" pane report-agent --source omacosy --agent shell --state idle "$first"
+    "$HERDR" pane report-agent --source omacosy --agent nvim --state working "$second"
+  } >>"$LOG" 2>&1
+}
+
+cd "$ROOT" 2>/dev/null || cd "$HOME" || exit 1
+setopt NO_HUP
+layout &
+disown
+exec "$HERDR"

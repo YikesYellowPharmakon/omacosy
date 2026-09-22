@@ -62,8 +62,12 @@ inner.vertical = 8
 outer.left = 2
 outer.bottom = 2
 outer.right = 2
-# macOS 27 still insets visibleFrame ~31pt with the menu bar hidden.
-outer.top = 7
+# Measured from the physical top, not from visibleFrame. The hidden
+# menu bar still reserves 30pt; a top gap inside that strip is clamped
+# back to y=30, so the 34pt bar covers the window. 38 clears it by
+# about 4pt. The external display has no reservation; 46 clears the
+# same bar. Applied when AeroSpace starts or reloads.
+outer.top = [{ monitor.secondary = 46 }, 38]
 
 # Fixed-size settings windows fight the tiler (resize -> snap back ->
 # relayout flicker); float them instead.

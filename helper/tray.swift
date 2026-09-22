@@ -19,12 +19,17 @@ func axString(_ el: AXUIElement, _ attr: String) -> String {
     (axCopy(el, attr) as? String) ?? ""
 }
 
-func collectItems(_ el: AXUIElement, into out: inout [AXUIElement]) {
+func collectItems(_ el: AXUIElement, into out: inout [AXUIElement], depth: Int = 0) {
+    if depth > 8 || out.count >= 80 { return }
     let role = axString(el, kAXRoleAttribute as String)
-    if role == (kAXMenuBarItemRole as String) || role == "AXMenuBarItem" {
+    let ident = axString(el, "AXIdentifier")
+    // macOS 27 draws the clock inside MenuBarAgent. It is still a menu
+    // bar item, but some builds only expose it by AXIdentifier.
+    if role == (kAXMenuBarItemRole as String) || role == "AXMenuBarItem"
+        || ident.contains("menuextra") || ident.contains("notificationcenter") {
         out.append(el)
     }
-    for c in axChildren(el) { collectItems(c, into: &out) }
+    for c in axChildren(el) { collectItems(c, into: &out, depth: depth + 1) }
 }
 
 func clickExtra(bundle: String, needles: [String]) -> String {
@@ -39,17 +44,28 @@ func clickExtra(bundle: String, needles: [String]) -> String {
             collectItems(ref as! AXUIElement, into: &items)
         }
     }
-    var seen: [String] = []
-    for item in items {
-        let desc = [kAXDescriptionAttribute as String,
-                    kAXTitleAttribute as String,
-                    kAXRoleDescriptionAttribute as String]
+    func label(_ item: AXUIElement) -> String {
+        let ident = axString(item, "AXIdentifier")
+        if !ident.isEmpty { return ident }
+        return [kAXDescriptionAttribute as String,
+                kAXTitleAttribute as String,
+                kAXRoleDescriptionAttribute as String]
             .map { axString(item, $0) }
             .first { !$0.isEmpty } ?? ""
+    }
+    func press(_ item: AXUIElement, _ name: String) -> String {
+        let err = AXUIElementPerformAction(item, kAXPressAction as CFString)
+        return err == .success ? "ok:\(name)" : "press-fail:\(name):\(err.rawValue)"
+    }
+    if let clock = items.first(where: { axString($0, "AXIdentifier") == "com.apple.menuextra.clock" }) {
+        return press(clock, "com.apple.menuextra.clock")
+    }
+    var seen: [String] = []
+    for item in items {
+        let desc = label(item)
         seen.append(desc.isEmpty ? "?" : desc)
         if needles.contains(where: { desc.localizedCaseInsensitiveContains($0) }) {
-            let err = AXUIElementPerformAction(item, kAXPressAction as CFString)
-            return err == .success ? "ok:\(desc)" : "press-fail:\(desc):\(err.rawValue)"
+            return press(item, desc)
         }
     }
     return "miss items=\(items.count) seen=\(seen.joined(separator: "|"))"
@@ -72,14 +88,21 @@ func commandKind() -> String {
 
 func runClick(_ kind: String) -> String {
     let needles = kind == "notifications"
-        ? ["Clock", "Notification", "通知", "时钟"]
+        ? ["Clock", "Notification Center", "Notification", "通知中心", "通知", "时钟"]
         : ["Control Center", "控制中心"]
-    var result = clickExtra(bundle: "com.apple.controlcenter", needles: needles)
-    if result.hasPrefix("miss") || result.hasPrefix("no-app") {
-        let other = clickExtra(bundle: "com.apple.systemuiserver", needles: needles)
-        if !other.hasPrefix("miss") && !other.hasPrefix("no-app") { result = other }
+    // macOS 27 hosts the menu-bar clock in MenuBarAgent, not Control Center.
+    let bundles = [
+        "com.apple.MenuBarAgent",
+        "com.apple.controlcenter",
+        "com.apple.systemuiserver",
+    ]
+    var last = "miss"
+    for bundle in bundles {
+        let result = clickExtra(bundle: bundle, needles: needles)
+        if result.hasPrefix("ok:") || result.hasPrefix("press-fail:") { return result }
+        last = "\(bundle) \(result)"
     }
-    return result
+    return last
 }
 
 func logLine(_ s: String) {
@@ -105,6 +128,10 @@ func watchLoop() {
         FileManager.default.createFile(atPath: path, contents: nil)
     }
     var last = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+    if !AXIsProcessTrusted() {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+    }
     logLine("watch start ax=\(AXIsProcessTrusted()) pid=\(getpid())")
     while true {
         let cur = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""

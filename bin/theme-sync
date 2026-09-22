@@ -34,7 +34,6 @@ SLUG_RE = re.compile(r"omarchytheme\.com/themes/([A-Za-z0-9._-]+)")
 GITHUB_RE = re.compile(r"github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)")
 
 COMMUNITY_MAP = {
-    "monokai-dark": ("ericrswanny", "omarchy-monokai-dark-theme"),
     "azure": ("tahfizhabib", "omarchy-azure-theme"),
     "snow-black": ("ankur311sudo", "snow_black"),
     "enter-the-matrix": ("tymurbogach", "omarchy-enter-the-matrix-theme"),
@@ -299,9 +298,9 @@ def generate_sidecars(theme_dir: Path) -> None:
 
 
 THEME_PINS = {
-    "snow-black": {"desktop": {"9.png"}, "lock": "4.png"},
+    "snow-black": {"desktop": {"8.jpg"}, "lock": "4.png"},
+    "space-monkey": {"desktop": {"01-Retro.png"}, "lock": "02-Retro-Rainbow.png"},
     "azure": {"desktop": {"1.png"}, "lock": "1.png"},
-    "monokai-dark": {"desktop": {"01. Monokai.png"}, "lock": "01. Monokai.png"},
     "enter-the-matrix": {
         "desktop": {"4-the-office.jpg"},
         "lock": "4-the-office.jpg",

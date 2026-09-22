@@ -325,12 +325,15 @@ func trayAxString(_ el: AXUIElement, _ attr: String) -> String {
     (trayAxCopy(el, attr) as? String) ?? ""
 }
 
-func trayCollectItems(_ el: AXUIElement, into out: inout [AXUIElement]) {
+func trayCollectItems(_ el: AXUIElement, into out: inout [AXUIElement], depth: Int = 0) {
+    if depth > 8 || out.count >= 80 { return }
     let role = trayAxString(el, kAXRoleAttribute as String)
-    if role == (kAXMenuBarItemRole as String) || role == "AXMenuBarItem" {
+    let ident = trayAxString(el, "AXIdentifier")
+    if role == (kAXMenuBarItemRole as String) || role == "AXMenuBarItem"
+        || ident.contains("menuextra") || ident.contains("notificationcenter") {
         out.append(el)
     }
-    for child in trayAxChildren(el) { trayCollectItems(child, into: &out) }
+    for child in trayAxChildren(el) { trayCollectItems(child, into: &out, depth: depth + 1) }
 }
 
 func trayClickExtra(bundle: String, needles: [String]) -> String {
@@ -345,9 +348,14 @@ func trayClickExtra(bundle: String, needles: [String]) -> String {
             trayCollectItems(ref as! AXUIElement, into: &items)
         }
     }
+    if let clock = items.first(where: { trayAxString($0, "AXIdentifier") == "com.apple.menuextra.clock" }) {
+        let err = AXUIElementPerformAction(clock, kAXPressAction as CFString)
+        return err == .success ? "ok:com.apple.menuextra.clock" : "press-fail:clock:\(err.rawValue)"
+    }
     var seen: [String] = []
     for item in items {
-        let desc = [kAXDescriptionAttribute as String,
+        let ident = trayAxString(item, "AXIdentifier")
+        let desc = !ident.isEmpty ? ident : [kAXDescriptionAttribute as String,
                     kAXTitleAttribute as String,
                     kAXRoleDescriptionAttribute as String]
             .map { trayAxString(item, $0) }
@@ -383,12 +391,13 @@ func handleTrayRequest() {
     let kind = raw.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
     guard ["controlcenter", "notifications"].contains(kind) else { return }
     let needles = kind == "notifications"
-        ? ["Clock", "Notification", "通知", "时钟"]
+        ? ["Clock", "Notification Center", "Notification", "通知中心", "通知", "时钟"]
         : ["Control Center", "控制中心"]
-    var result = trayClickExtra(bundle: "com.apple.controlcenter", needles: needles)
-    if result.hasPrefix("miss") || result.hasPrefix("no-app") {
-        let other = trayClickExtra(bundle: "com.apple.systemuiserver", needles: needles)
-        if !other.hasPrefix("miss") && !other.hasPrefix("no-app") { result = other }
+    var result = "miss"
+    for bundle in ["com.apple.MenuBarAgent", "com.apple.controlcenter", "com.apple.systemuiserver"] {
+        result = trayClickExtra(bundle: bundle, needles: needles)
+        if result.hasPrefix("ok:") || result.hasPrefix("press-fail:") { break }
+        result = "\(bundle) \(result)"
     }
     traylog("tray \(kind) ax=\(AXIsProcessTrusted()) \(result)")
 }

@@ -3260,6 +3260,7 @@ func omacosyScreensaverProcessVisible(in text: String) -> Bool {
 
 func fullscreenDisplays() -> Set<CGDirectDisplayID> {
     var covered: Set<CGDirectDisplayID> = []
+    browserFullscreen = []
     if screensaverActive() {
         var ids = [CGDirectDisplayID](repeating: 0, count: 8)
         var n: UInt32 = 0
@@ -3285,26 +3286,68 @@ func fullscreenDisplays() -> Set<CGDirectDisplayID> {
 
     for window in list {
         guard (window[kCGWindowLayer as String] as? Int) == 0,
-              let b = window[kCGWindowBounds as String] as? [String: CGFloat] else { continue }
-        let rect = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+              let rect = windowBounds(window) else { continue }
+        let owner = window[kCGWindowOwnerName as String] as? String ?? ""
         for i in 0..<Int(count) {
             let display = CGDisplayBounds(ids[i])
             guard display.intersects(rect) else { continue }
             let inset = safeTop(for: display)
+            let top = rect.origin.y - display.origin.y
+            let bottom = (display.origin.y + display.height) - rect.maxY
             // Height and top edge alone are NOT enough, measured: on a
             // notched display the notch inset (32) and the gap a tiled
             // window leaves for the bar (33) are the same edge, so an
-            // ordinary tiled Arc reads as fullscreen. WIDTH is what
+            // ordinary tiled window reads as fullscreen. WIDTH is what
             // separates them — `--no-outer-gaps` means exactly that, the
-            // window takes the side gaps too, and a tiled one never does.
-            if rect.origin.y - display.origin.y < inset + 3,
-               rect.height >= display.height - inset - 6,
-               rect.width >= display.width - 2 {
+            // window takes the side gaps too, and a tiled one never does
+            // (outer.left/right are 2, so a tile is about 4pt short).
+            let fullWidth = rect.width >= display.width - 2 && abs(rect.minX - display.minX) < 4
+            let flush = top < inset + 3 && rect.height >= display.height - inset - 6 && fullWidth
+            // Chrome fullscreen keeps a toolbar band, so the page starts
+            // below y=0 (measured y=122 on the built-in) and the bar shows
+            // through that band. The page is still full width and reaches
+            // the bottom. A short toolbar itself is not tall enough.
+            let chromePage = fullWidth
+                && top < 240
+                && bottom < 20
+                && rect.height >= max(400, display.height * 0.68)
+            if flush || chromePage {
                 covered.insert(ids[i])
+                if browserOwner(owner) { browserFullscreen.insert(ids[i]) }
             }
         }
     }
     return covered
+}
+
+func windowBounds(_ window: [String: Any]) -> CGRect? {
+    guard let raw = window[kCGWindowBounds as String] else { return nil }
+    let dict: [String: Any]
+    if let typed = raw as? [String: CGFloat] {
+        return CGRect(x: typed["X"] ?? 0, y: typed["Y"] ?? 0,
+                      width: typed["Width"] ?? 0, height: typed["Height"] ?? 0)
+    } else if let any = raw as? [String: Any] {
+        dict = any
+    } else {
+        return nil
+    }
+    func num(_ key: String) -> CGFloat {
+        if let n = dict[key] as? CGFloat { return n }
+        if let n = dict[key] as? NSNumber { return CGFloat(truncating: n) }
+        return 0
+    }
+    let rect = CGRect(x: num("X"), y: num("Y"), width: num("Width"), height: num("Height"))
+    guard rect.width >= 1, rect.height >= 1 else { return nil }
+    return rect
+}
+
+func browserOwner(_ name: String) -> Bool {
+    switch name {
+    case "Google Chrome", "Chromium", "Arc", "Microsoft Edge", "Brave Browser", "Dia":
+        return true
+    default:
+        return name.hasPrefix("Google Chrome")
+    }
 }
 
 // Hidden by fullscreen, but reachable: put the pointer at the very top of
@@ -3314,6 +3357,7 @@ func fullscreenDisplays() -> Set<CGDirectDisplayID> {
 // While revealed the bar has to climb ABOVE the fullscreen window — its
 // resting level of -20 is what hides it in the first place — and it drops
 // back down when the pointer leaves.
+var browserFullscreen: Set<CGDirectDisplayID> = []
 let barBaseLevel = NSWindow.Level(rawValue: -20)
 // Revealed, the bar has to clear omacosy-borders' fullscreen shroud, which
 // sits at .screenSaver (1000) and blacks out the camera strip so that
@@ -3368,9 +3412,11 @@ func pointerAtScreenTop() {
     guard let screen = NSScreen.screens.first(where: { $0.frame.insetBy(dx: 0, dy: -2).contains(p) })
     else { return }
     let fromTop = screen.frame.maxY - p.y
-    if focusedIsNativeFullscreen() {
-        // Native fullscreen: the system menu bar owns this edge (traffic
-        // lights). Do not climb the omacosy bar over them.
+    let coveredNow = fullscreenDisplays()
+    if focusedIsNativeFullscreen() || browserFullscreen.contains(screenID(screen)) {
+        // Native fullscreen and browser fullscreen own this edge. Chrome
+        // slides its own toolbar in on hover; climbing our bar over it
+        // is the pop-out.
         if revealed { setRevealed(false) }
         return
     }
@@ -3381,8 +3427,8 @@ func pointerAtScreenTop() {
     if fromTop <= revealEdge {
         // Climb only for AeroSpace / geometry fullscreen. Everyday use
         // keeps the bar at -20; the native menu bar is buried separately
-        // so the two never stack on this edge.
-        if fullscreenDisplays().contains(screenID(screen)) {
+        // so the two never stack on this edge. Browsers are excluded above.
+        if coveredNow.contains(screenID(screen)) {
             setRevealed(true)
         }
     } else if revealed, openPopup == nil, fromTop > barHeight + 12 {
@@ -3806,6 +3852,10 @@ watch(FileManager.default.homeDirectoryForCurrentUser
     iconCache.removeAll()
     set("notifications") { $0.icon = "󰂚"; $0.iconColor = nil }
     set("activity") { $0.icon = "󰍛"; $0.iconColor = nil }
+    // The battery glyph stores its color. A palette reload does not
+    // touch it, so it kept the previous theme until the next power tick.
+    updateBattery()
+    tlog("battery theme")
     if let scroll = popupWindow?.contentView as? NSScrollView {
         scroll.layer?.borderColor = palette.accent.cgColor
         scroll.layer?.backgroundColor = mixColor(palette.barBG, palette.accent, 0.10).cgColor

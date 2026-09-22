@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Keep a Ghostty cursor moving so shader previews stay visible."""
+
+import shutil
+import sys
+import time
+
+sys.stdout.write("\033]0;光标预览\007")
+sys.stdout.write("\033[?25h\033[6 q\033[2J")
+sys.stdout.flush()
+
+stops = (
+    (0.18, 0.25),
+    (0.78, 0.25),
+    (0.78, 0.72),
+    (0.18, 0.72),
+    (0.50, 0.48),
+)
+
+while True:
+    size = shutil.get_terminal_size((80, 24))
+    width = max(20, size.columns)
+    height = max(8, size.lines)
+    sys.stdout.write("\033[H\033[2K这是 Ghostty 光标。左边换效果，看这里。\n")
+    sys.stdout.write("\033[2KNeovim 里的光标不会变。\n")
+    for x_ratio, y_ratio in stops:
+        column = max(1, min(width, int(width * x_ratio)))
+        row = max(3, min(height, int(height * y_ratio)))
+        sys.stdout.write(f"\033[{row};{column}H")
+        sys.stdout.flush()
+        time.sleep(0.45)

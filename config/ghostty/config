@@ -34,3 +34,6 @@ quit-after-last-window-closed = true
 
 # Live palette from the active omacosy/omarchy theme.
 config-file = ?/Users/ye/.config/omarchy/current/theme/ghostty.conf
+
+# Opening Ghostty starts Herdr. The first window also opens Neovim.
+command = /Users/ye/.local/bin/omacosy-studio

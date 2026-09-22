@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""Preview Ghostty cursor shaders in the live terminal.
+
+j/k flips through one shader at a time. Space stacks up to four, Enter
+shows the stack (earlier ones sit underneath). Color keys tint only the
+highlighted layer. q restores the theme file.
+"""
+
+import colorsys
+import curses
+import re
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path.home() / ".local/share/omacosy"
+SHADER_DIR = ROOT / "share/cursor-playground"
+DANCE = ROOT / "bin/omacosy-cursor-dance"
+PREVIEW_DIR = Path("/tmp/omacosy-cursor-preview-shaders")
+STATE_DIR = Path("/tmp/omacosy-cursor-preview-state")
+BAK = STATE_DIR / "ghostty.conf.bak"
+PATHFILE = STATE_DIR / "theme-path"
+GHOSTTY_CONFIG = Path.home() / ".config/ghostty/config"
+THEME_LINK = Path.home() / ".config/omarchy/current/theme/ghostty.conf"
+MAX_STACK = 4
+
+ORDER = [
+    "cursor_blaze.glsl",
+    "cursor_blaze_tapered.glsl",
+    "cursor_blaze_no_trail.glsl",
+    "blaze_sparks.glsl",
+    "sparks.glsl",
+    "party_sparks.glsl",
+    "cursor_smear.glsl",
+    "cursor_smear_fade.glsl",
+    "cursor_smear_gradient.glsl",
+    "cursor_smear_rainbow.glsl",
+    "cursor_frozen.glsl",
+    "cursor_border_1.glsl",
+    "manga_slash.glsl",
+    "shake.glsl",
+    "zoom_and_aberration.glsl",
+    "last_letter_zoom.glsl",
+    "cursor_smear_original.glsl",
+    "cursor_smear_fade_original.glsl",
+    "cursor_smear_gradient_original.glsl",
+    "cursor_smear_rainbow_original.glsl",
+    "debug_cursor_static.glsl",
+    "debug_cursor_animated.glsl",
+    "test.glsl",
+    "WIP.glsl",
+]
+
+PRESETS = [
+    ("1 雪", (0xA0, 0x66, 0x66)),
+    ("2 蓝", (0x61, 0xA7, 0xD6)),
+    ("3 绿", (0x7B, 0xAE, 0x4E)),
+    ("4 猴", (0xBD, 0x49, 0x24)),
+    ("5 白", (0xFF, 0xFF, 0xFF)),
+]
+
+
+def theme_path():
+    return THEME_LINK.resolve()
+
+
+def touch_ghostty():
+    GHOSTTY_CONFIG.touch()
+
+
+def restore():
+    if not BAK.is_file() or not PATHFILE.is_file():
+        return
+    dest = Path(PATHFILE.read_text(encoding="utf-8").strip())
+    dest.write_bytes(BAK.read_bytes())
+    BAK.unlink()
+    PATHFILE.unlink(missing_ok=True)
+    if GHOSTTY_CONFIG.is_file():
+        kept = [
+            line
+            for line in GHOSTTY_CONFIG.read_text(encoding="utf-8").splitlines()
+            if not line.startswith("# preview ")
+        ]
+        GHOSTTY_CONFIG.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    stop_dance()
+    touch_ghostty()
+
+
+def backup():
+    if BAK.is_file():
+        restore()
+    src = theme_path()
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    BAK.write_bytes(src.read_bytes())
+    PATHFILE.write_text(str(src), encoding="utf-8")
+
+
+def read_cursor_color(text):
+    match = re.search(r"(?m)^cursor-color\s*=\s*#?([0-9A-Fa-f]{6})\s*$", text)
+    if not match:
+        return (0xA0, 0x66, 0x66)
+    hex_color = match.group(1)
+    return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def hex_of(rgb):
+    return "".join(f"{c:02X}" for c in rgb)
+
+
+def glsl_comps(rgb):
+    return ", ".join(f"{c / 255:.4f}" for c in rgb)
+
+
+def darker(rgb):
+    return tuple(max(0, int(c * 0.55)) for c in rgb)
+
+
+def shift_hue(rgb, delta):
+    r, g, b = (c / 255 for c in rgb)
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    r, g, b = colorsys.hsv_to_rgb((h + delta) % 1.0, s, v)
+    return tuple(max(0, min(255, int(c * 255))) for c in (r, g, b))
+
+
+def shift_value(rgb, factor):
+    r, g, b = (c / 255 for c in rgb)
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    r, g, b = colorsys.hsv_to_rgb(h, s, max(0.0, min(1.0, v * factor)))
+    return tuple(max(0, min(255, int(c * 255))) for c in (r, g, b))
+
+
+def tint_source(text, rgb):
+    body = glsl_comps(rgb)
+    edge = glsl_comps(darker(rgb))
+
+    def vec4(name, comps, source):
+        pattern = rf"(const\s+vec4\s+{name}\s*=\s*vec4\()[^)]*(\))"
+        return re.sub(pattern, rf"\g<1>{comps}, 1.0\2", source)
+
+    text = vec4("TRAIL_COLOR", body, text)
+    text = vec4("TRAIL_COLOR_ACCENT", edge, text)
+    text = vec4("PREVIOUS_COLOR", body, text)
+    text = re.sub(
+        r"(const\s+vec3\s+BLAZE_COLOR\s*=\s*vec3\()[^)]*(\))",
+        rf"\g<1>{body}\2",
+        text,
+    )
+    text = re.sub(
+        r"(?m)^(\s*)base_color\s*=\s*(?!iCurrentCursorColor).*;\s*$",
+        rf"\1base_color = vec3({body});",
+        text,
+    )
+    # One Ghostty cursor-color is shared by every pass. A tinted copy
+    # substitutes its own color so stacked layers can differ.
+    text = text.replace("iCurrentCursorColor", f"vec4({body}, 1.0)")
+    return text
+
+
+def shader_names():
+    found = {p.name for p in SHADER_DIR.glob("*.glsl")}
+    ordered = [name for name in ORDER if name in found]
+    ordered.extend(sorted(found.difference(ordered)))
+    return ordered
+
+
+def materialize(names, colors, tints):
+    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for name in names:
+        src = SHADER_DIR / name
+        if tints.get(name, True):
+            dest = PREVIEW_DIR / name
+            dest.write_text(
+                tint_source(src.read_text(encoding="utf-8"), colors[name]),
+                encoding="utf-8",
+            )
+            paths.append(dest)
+        else:
+            paths.append(src)
+    return paths
+
+
+def rewrite(original, shader_paths, rgb):
+    color = hex_of(rgb)
+    out = []
+    inserted = False
+    had_color = False
+    for line in original.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("custom-shader ") or stripped.startswith("custom-shader="):
+            if not inserted:
+                out.extend(f"custom-shader = {path}" for path in shader_paths)
+                inserted = True
+            continue
+        if stripped.startswith("custom-shader-animation"):
+            continue
+        if stripped.startswith("cursor-color"):
+            out.append(f"cursor-color = {color}")
+            had_color = True
+            continue
+        out.append(line)
+    if not inserted:
+        out.extend(f"custom-shader = {path}" for path in shader_paths)
+    if not had_color:
+        out.append(f"cursor-color = {color}")
+    out.append("custom-shader-animation = always")
+    return "\n".join(out) + "\n"
+
+
+def stop_dance():
+    subprocess.run(
+        ["pkill", "-f", str(DANCE)],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def start_dance():
+    stop_dance()
+    subprocess.Popen(
+        ["open", "-na", "Ghostty.app", "--args", f"--command={DANCE}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def herdr_window_id():
+    try:
+        out = subprocess.check_output(
+            ["aerospace", "list-windows", "--all", "--format", "%{window-id}|%{app-name}|%{window-title}"],
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    for line in out.splitlines():
+        window_id, app, title = (line.split("|", 2) + ["", ""])[:3]
+        if app == "Ghostty" and "光标预览" not in title:
+            return window_id
+    return None
+
+
+def restart_dance():
+    subprocess.run(
+        ["pkill", "-f", f"ghostty --command={DANCE}"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    subprocess.Popen(
+        ["open", "-na", "Ghostty.app", "--args", f"--command={DANCE}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(0.45)
+    window_id = herdr_window_id()
+    if window_id:
+        subprocess.run(
+            ["aerospace", "focus", "--window-id", window_id],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+
+def apply(names, colors, tints):
+    if not names:
+        return
+    original = BAK.read_text(encoding="utf-8")
+    paths = materialize(names, colors, tints)
+    top = colors[names[-1]]
+    dest = Path(PATHFILE.read_text(encoding="utf-8").strip())
+    dest.write_text(rewrite(original, paths, top), encoding="utf-8")
+    # Ghostty keeps the shader it loaded at startup. The bytes of the
+    # top-level config have to change, and the preview window has to
+    # start again, or the right-hand cursor stays on the old effect.
+    kept = [
+        line
+        for line in GHOSTTY_CONFIG.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("# preview ")
+    ]
+    stamp = "+".join(
+        f"{Path(name).stem}:{'orig' if not tints.get(name, True) else hex_of(colors[name])}"
+        for name in names
+    )
+    kept.append(f"# preview {stamp}")
+    GHOSTTY_CONFIG.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    restart_dance()
+
+
+def run(stdscr):
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+    names = shader_names()
+    if not names:
+        raise SystemExit(f"没有找到着色器：{SHADER_DIR}")
+    original = BAK.read_text(encoding="utf-8")
+    base = read_cursor_color(original)
+    colors = {name: base for name in names}
+    tints = {name: True for name in names}
+    index = 0
+    stack = []
+    mode = "single"
+    hex_mode = False
+    hex_buf = ""
+    scroll = 0
+
+    def showing_names():
+        if mode == "stack" and stack:
+            return list(stack)
+        return [names[index]]
+
+    def paint():
+        apply(showing_names(), colors, tints)
+
+    def recolor(new_rgb):
+        colors[names[index]] = new_rgb
+        if names[index] in showing_names():
+            paint()
+
+    paint()
+
+    while True:
+        height, width = stdscr.getmaxyx()
+        stdscr.erase()
+        showing = showing_names()
+        here = names[index]
+        here_color = "原色" if not tints[here] else hex_of(colors[here])
+        if mode == "stack" and stack:
+            layers = "  ".join(
+                f"{i + 1}:{'原色' if not tints[name] else hex_of(colors[name])}"
+                for i, name in enumerate(stack)
+            )
+            title = f"叠层  正在调 {here_color}  {layers}"
+        else:
+            title = f"单个 {Path(here).stem}  {here_color}"
+        stdscr.addnstr(0, 0, title, width - 1)
+        presets = "  ".join(label for label, _ in PRESETS) + "   c 自定色"
+        stdscr.addnstr(1, 0, presets, width - 1)
+        help1 = "空格叠上。调色只改高亮这一层，其他层保持自己的颜色"
+        help2 = "-/= 明暗    ,/. 色相    t 这一层原色    q 退出并恢复"
+        stdscr.addnstr(2, 0, help1, width - 1)
+        stdscr.addnstr(3, 0, help2, width - 1)
+        if hex_mode:
+            stdscr.addnstr(4, 0, f"这一层输入 6 位颜色 {hex_buf}_", width - 1)
+        note = "彩虹、渐变、派对火花不吃染色。光标方块跟最上面一层。"
+        stdscr.addnstr(5, 0, note, width - 1)
+
+        top = 7
+        rows = max(1, height - top - 1)
+        if index < scroll:
+            scroll = index
+        if index >= scroll + rows:
+            scroll = index - rows + 1
+        for row, name in enumerate(names[scroll : scroll + rows]):
+            absolute = scroll + row
+            mark = " "
+            if name in stack:
+                mark = str(stack.index(name) + 1)
+            cursor = ">" if absolute == index else " "
+            swatch = "原色  " if not tints[name] else hex_of(colors[name])
+            line = f"{cursor} {mark} {swatch} {name}"
+            stdscr.addnstr(top + row, 0, line, width - 1)
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if hex_mode:
+            if key in (10, 13, curses.KEY_ENTER):
+                if len(hex_buf) == 6:
+                    tints[names[index]] = True
+                    recolor(tuple(int(hex_buf[i : i + 2], 16) for i in (0, 2, 4)))
+                hex_mode = False
+                hex_buf = ""
+            elif key in (27, 127, curses.KEY_BACKSPACE):
+                hex_buf = hex_buf[:-1]
+            elif chr(key).lower() in "0123456789abcdef" and len(hex_buf) < 6:
+                hex_buf += chr(key).lower()
+            continue
+
+        if key == curses.KEY_MOUSE:
+            try:
+                _, _mx, my, _, bstate = curses.getmouse()
+            except curses.error:
+                continue
+            if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
+                row = my - top + scroll
+                if 0 <= row < len(names):
+                    index = row
+                    if not stack:
+                        mode = "single"
+                        paint()
+            continue
+        if key in (ord("q"), ord("Q")):
+            return
+        if key in (ord("j"), curses.KEY_DOWN):
+            index = (index + 1) % len(names)
+            if not stack:
+                mode = "single"
+                paint()
+        elif key in (ord("k"), curses.KEY_UP):
+            index = (index - 1) % len(names)
+            if not stack:
+                mode = "single"
+                paint()
+        elif key == ord(" "):
+            name = names[index]
+            if name in stack:
+                stack.remove(name)
+            elif len(stack) < MAX_STACK:
+                stack.append(name)
+            if stack:
+                mode = "stack"
+            else:
+                mode = "single"
+            paint()
+        elif key in (10, 13, curses.KEY_ENTER):
+            mode = "stack" if stack else "single"
+            paint()
+        elif key == ord("t"):
+            tints[names[index]] = not tints[names[index]]
+            if names[index] in showing_names():
+                paint()
+        elif key == ord("-"):
+            recolor(shift_value(colors[names[index]], 0.9))
+        elif key == ord("="):
+            recolor(shift_value(colors[names[index]], 1.1))
+        elif key == ord(","):
+            recolor(shift_hue(colors[names[index]], -0.03))
+        elif key == ord("."):
+            recolor(shift_hue(colors[names[index]], 0.03))
+        elif key == ord("c"):
+            hex_mode = True
+            hex_buf = ""
+        elif ord("1") <= key <= ord("5"):
+            tints[names[index]] = True
+            recolor(PRESETS[key - ord("1")][1])
+
+
+def main():
+    if "--restore" in sys.argv:
+        restore()
+        return
+    if not SHADER_DIR.is_dir():
+        raise SystemExit(f"着色器目录不在：{SHADER_DIR}")
+    backup()
+
+    def stop(_signum, _frame):
+        restore()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGHUP, stop)
+    try:
+        curses.wrapper(run)
+    finally:
+        restore()
+
+
+if __name__ == "__main__":
+    main()

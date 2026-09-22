@@ -21,6 +21,8 @@ compinit -C
 
 # Live fzf / eza / bat / LS_COLORS from the active theme.
 [ -r "$HOME/.config/omarchy/current/theme/shell.env" ] && source "$HOME/.config/omarchy/current/theme/shell.env"
+# Completion menus read LS_COLORS only when this style is set.
+zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
 
 # CLI stack (after .zshrc.local so frameworks there can't clobber these)
 eval "$(starship init zsh)"

@@ -32,6 +32,8 @@ launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" 2>/dev/n
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" "$HOME/.local/bin/omacosy-dwindle"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" "$HOME/.local/bin/omacosy-bar"
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.dock.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.omacosy.dock.plist" "$HOME/.local/bin/omacosy-dock"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.tray.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.tray.plist" "$HOME/.local/bin/omacosy-tray" "$HOME/.local/bin/omacosy-spotlight"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.pkd-guard.plist" 2>/dev/null || true
@@ -101,6 +103,10 @@ else
   defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadFourFingerVertSwipeGesture -int 2 2>/dev/null || true
   defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadFourFingerHorizSwipeGesture -int 2 2>/dev/null || true
   defaults delete com.apple.dock showMissionControlGestureEnabled 2>/dev/null || true
+fi
+if [ -f "$HOME/.local/state/omacosy/dock-autohide-delay" ]; then
+  defaults write com.apple.dock autohide-delay -float "$(tr -d '[:space:]' < "$HOME/.local/state/omacosy/dock-autohide-delay")"
+  rm -f "$HOME/.local/state/omacosy/dock-autohide-delay"
 fi
 killall cfprefsd 2>/dev/null || true
 killall SystemUIServer 2>/dev/null || true

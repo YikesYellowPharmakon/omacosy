@@ -113,7 +113,7 @@
 <body>
 <header>
   <h1>omacosy 当前键位设置</h1>
-  <p class="sub">导出时间：2026-09-21 · 窗口管理器：AeroSpace · Super = Option（⌥）</p>
+  <p class="sub">导出时间：2026-09-22 · 窗口管理器：AeroSpace · Super = Option（⌥）</p>
   <div class="callout">
     <strong>Super 就是 Option（⌥）</strong>。Command（⌘）继续走 macOS 原键：复制粘贴、关标签、退出 App、⌘Tab 切 App。<br>
     Caps Lock 仍是 Caps Lock，方便中文输入法。Karabiner 没有改 Super。<br>
@@ -176,10 +176,10 @@
 <h2>主题</h2>
 <table>
   <tr><th>键位</th><th>作用</th></tr>
-  <tr><td><span class="k">⌥ Shift T</span></td><td>切到下一套主题（也可点顶栏苹果菜单里的 Next Theme）</td></tr>
+  <tr><td><span class="k">⌥ Shift T</span></td><td>切到下一套主题。顶栏苹果菜单里的 Theme 是主题列表，点名字直接换到那一套</td></tr>
   <tr><td><span class="k">⌥ Shift B</span></td><td>切到当前主题的下一张壁纸</td></tr>
 </table>
-<p class="note">现有主题：azure、enter-the-matrix、monokai-dark、snow-black。当前是 enter-the-matrix。每个主题记住上次选过的颜色和壁纸，切换回来还是那套。没有单独的主题列表或颜色选择快捷键。桌面数字雨默认关闭。</p>
+<p class="note">现有主题：azure、enter-the-matrix、snow-black、space-monkey。每个主题记住上次选过的颜色和壁纸，切换回来还是那套。没有单独的主题列表或颜色选择快捷键。桌面数字雨默认关闭。</p>
 
 <h2>原来 menu bar 上的功能怎么用</h2>
 <p class="note warn" style="margin-top:0;margin-bottom:10px">系统 File / 编辑 / 显示 菜单栏不出现。也不再从 App 名称弹出菜单。下面这些键和入口仍然有效。</p>
@@ -193,7 +193,7 @@
   <tr><td>隐藏当前 App / 隐藏其它</td><td><span class="k">⌘ H</span> / <span class="k">⌘ ⌥ H</span></td></tr>
   <tr><td>当前 App 的设置</td><td><span class="k">⌘ ,</span></td></tr>
   <tr><td>关于本机 / 系统设置 / 锁屏 / 睡眠 / 重启 / 关机</td><td>点顶栏左边苹果图标</td></tr>
-  <tr><td>屏保 / 下一主题</td><td>苹果菜单里的 Screensaver、Next Theme；锁屏也可用 <span class="k">⌃ ⌥ L</span></td></tr>
+  <tr><td>屏保 / 换主题</td><td>苹果菜单里的 Screensaver、Theme；锁屏也可用 <span class="k">⌃ ⌥ L</span>。直接下一套是 <span class="k">⌥ Shift T</span></td></tr>
   <tr><td>记不清某个菜单项</td><td><span class="k">⌥ Space</span> 或 <span class="k">⌘ Space</span> 打开 Spotlight 搜索</td></tr>
 </table>
 <p class="note">各 App 自己的 ⌘ 快捷键都还在，只是不能再用鼠标去点那条系统菜单栏。</p>
@@ -222,7 +222,7 @@
   <tr><td>四指上滑</td><td>打开工作区总览</td></tr>
   <tr><td>四指向下滑</td><td>关闭工作区总览</td></tr>
 </table>
-<p class="note">系统自带的四指 Mission Control / 滑桌面已被关掉，避免和 omacosy 手势抢同一套动作。页面处于系统原生全屏时，左右滑或总览里点数字会先离开全屏再切工作区；划回原工作区会重新进入全屏。</p>
+<p class="note">系统四指切桌面已经关掉，四指归 omacosy。三指左右滑、三指上下滑，以及 Control+左右切桌面、Control+上打开调度台，也已经关掉，避免再切出 macOS 自己的桌面。每块屏幕仍保留一个系统桌面，「显示器拥有独立空间」保持打开。页面处于系统原生全屏时，左右滑或总览里点数字会先离开全屏再切工作区；划回原工作区会重新进入全屏。</p>
 
 <h2>工作区总览里</h2>
 <table>
@@ -238,14 +238,14 @@
 <h2>顶栏（omacosy-bar）</h2>
 <table>
   <tr><th>操作</th><th>作用</th></tr>
-  <tr><td>点左边苹果图标</td><td>About This Mac、System Settings、Lock Screen、Screensaver、Sleep、Restart、Shut Down、Next Theme。有辅助功能权限时，还会带上系统苹果菜单里的其它项</td></tr>
+  <tr><td>点左边苹果图标</td><td>About This Mac、System Settings、Lock Screen、Screensaver、Sleep、Restart、Shut Down、Theme。Theme 打开主题列表。有辅助功能权限时，还会带上系统苹果菜单里的其它项</td></tr>
   <tr><td>点工作区数字</td><td>切换工作区</td></tr>
   <tr><td>Spotify 在播时中间的媒体胶囊</td><td>上一首 / 播放暂停 / 下一首；点歌名打开 Spotify</td></tr>
   <tr><td>天气 / Wi-Fi / 蓝牙</td><td>点击弹出详情</td></tr>
   <tr><td>亮度胶囊：滚轮 / 点击</td><td>调亮度；滚过 0 会继续用遮罩把屏压得更暗；弹出里还有夜览开关</td></tr>
   <tr><td>音量胶囊：滚轮 / 点击</td><td>调音量；弹出里是滑杆和输出设备</td></tr>
   <tr><td>电池</td><td>打开系统电池设置</td></tr>
-  <tr><td>铃铛图标</td><td>打开通知中心看消息</td></tr>
+  <tr><td>铃铛图标</td><td>打开通知摘要（排序、预览）。摘要里的 system center 才打开系统通知中心</td></tr>
   <tr><td>时钟</td><td>弹出月历</td></tr>
   <tr><td>最右边活动图标</td><td>打开 Ghostty 里的 btop</td></tr>
   <tr><td>平时 / 全屏</td><td>平时只有 omacosy 顶栏。系统菜单栏埋掉。⌥F 全屏时顶栏被盖住，鼠标移到顶端会再浮上来</td></tr>

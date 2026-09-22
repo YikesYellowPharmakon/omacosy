@@ -11,7 +11,7 @@ On top of upstream's tiling desktop, this machine is tuned to stay a normal Mac 
 - **Super is Option.** Command still does copy, paste, and app switching. Caps Lock stays Caps Lock for the Chinese IME — it is not remapped to Hyper.
 - **Spotlight is `Cmd-Space` and `Option-Space`.** Raycast is not installed.
 - **Default apps** in `config/apps.conf`: Ghostty, Google Chrome, NetEase Cloud Music, ChatGPT (`Option-Return` / `Option-Shift-Return` / `M` / `G`).
-- **Themes:** azure, enter-the-matrix, monokai-dark, snow-black. Pick one from the bar; the last accent color per theme is remembered. The only extra in the Apple menu is Theme.
+- **Themes:** azure, enter-the-matrix, snow-black, space-monkey. Pick one from the bar; the last accent color per theme is remembered. The only extra in the Apple menu is Theme.
 - **Screensaver:** Ghostty + ttfx on the main display only, 120 fps, shuffle-bag so an effect does not repeat until every effect in the set has played. Idle 5 minutes to start, 7 more minutes then display-off and lock. No desktop rain. External screens stay dark covers, not a second saver.
 - **Cheatsheet:** icon-only control on the left of the bar, `Option-K` to toggle. The sheet fits the screen (3 / 2 / 1 columns) instead of drawing off the edge.
 - **Sequoia plugin guard:** `omacosy-pkd-guard` runs at login and every 5 minutes. If System Settings panes or the iCloud Drive file provider drop out of pluginkit, it only re-adds the matching `/System` appexes. Not resident, no GPU.
@@ -394,7 +394,7 @@ on every display, and any terminal that follows omarchy's
 theme's wallpapers. Each theme keeps the last chosen accent and
 wallpaper.
 
-Themes: `azure`, `enter-the-matrix`, `monokai-dark`, `snow-black`. Each
+Themes: `azure`, `enter-the-matrix`, `snow-black`, `space-monkey`. Each
 `themes/<name>/` holds `colors.toml` (omarchy's 22-color palette),
 `sketchybar.sh` / `borders.sh` (bar and ring colors; the file keeps its
 omarchy name and format, and the ring uses the theme accent, omarchy's
