@@ -62,12 +62,14 @@ inner.vertical = 8
 outer.left = 2
 outer.bottom = 2
 outer.right = 2
-# Measured from the physical top, not from visibleFrame. The hidden
-# menu bar still reserves 30pt; a top gap inside that strip is clamped
-# back to y=30, so the 34pt bar covers the window. 38 clears it by
-# about 4pt. The external display has no reservation; 46 clears the
-# same bar. Applied when AeroSpace starts or reloads.
-outer.top = [{ monitor.secondary = 46 }, 38]
+# The built-in display keeps a 30pt menu-bar reservation with the menu
+# bar hidden, and AeroSpace adds outer.top below that reservation.
+# The bar occupies 0..34, so 11 lands a window at y=41: a few points
+# under the bar, the gap this screen was tuned to. Treating the number
+# as a distance from the physical top (38) stacks it on the 30pt and
+# opens a wide band. The external display has no reservation, so 46
+# is from its physical top and clears the same bar.
+outer.top = [{ monitor.secondary = 46 }, 11]
 
 # Fixed-size settings windows fight the tiler (resize -> snap back ->
 # relayout flicker); float them instead.

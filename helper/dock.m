@@ -7,6 +7,10 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <QuartzCore/QuartzCore.h>
 
+typedef int SLSConnectionID;
+extern SLSConnectionID SLSMainConnectionID(void);
+extern CGError SLSSetWindowAlpha(SLSConnectionID cid, uint32_t wid, float alpha);
+
 static const CGFloat kIcon = 32;
 static const CGFloat kPadX = 10;
 static const CGFloat kPadY = 6;
@@ -17,6 +21,11 @@ static const CGFloat kLift = 6;
 static const CGFloat kDragHeadroom = 18;
 static const NSInteger kDockLevel = 1002;
 static const NSInteger kStripLevel = 1001;
+// The system Dock's fullscreen reveal starts when the pointer is on the
+// bottom two points. The hit strip is taller than that, and the pointer
+// is held on the inner part of the strip.
+static const CGFloat kStripHeight = 8;
+static const CGFloat kEdgeGuard = 4;
 
 static void note(const char *msg) {
     fprintf(stderr, "omacosy-dock: %s\n", msg);
@@ -277,6 +286,104 @@ static DockController *controller;
 }
 @end
 
+@interface AXNode : NSObject
+@property(assign) AXUIElementRef element;
+@end
+@implementation AXNode
+- (instancetype)initWithElement:(AXUIElementRef)element {
+    self = [super init];
+    if (self && element) {
+        CFRetain(element);
+        _element = element;
+    }
+    return self;
+}
+- (void)dealloc {
+    if (_element) CFRelease(_element);
+}
+@end
+
+@interface DockTarget : NSObject
+@property(assign) pid_t pid;
+@property(strong) AXNode *windowNode;
+@property(strong) AXNode *tabNode;
+@end
+@implementation DockTarget
+@end
+
+static NSString *axString(AXUIElementRef element, CFStringRef attribute) {
+    CFTypeRef value = NULL;
+    if (!element || AXUIElementCopyAttributeValue(element, attribute, &value) != kAXErrorSuccess || !value) return nil;
+    if (CFGetTypeID(value) != CFStringGetTypeID()) {
+        CFRelease(value);
+        return nil;
+    }
+    return (__bridge_transfer NSString *)value;
+}
+
+static NSString *menuTitle(NSString *raw) {
+    NSString *title = [[raw stringByReplacingOccurrencesOfString:@"\n" withString:@" "]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (title.length > 90) title = [[title substringToIndex:87] stringByAppendingString:@"…"];
+    return title.length ? title : nil;
+}
+
+static BOOL axSelected(AXUIElementRef element) {
+    CFTypeRef value = NULL;
+    if (AXUIElementCopyAttributeValue(element, CFSTR("AXSelected"), &value) != kAXErrorSuccess || !value) return NO;
+    BOOL on = CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value);
+    CFRelease(value);
+    return on;
+}
+
+static BOOL axFlag(AXUIElementRef element, CFStringRef attribute) {
+    CFTypeRef value = NULL;
+    if (!element || AXUIElementCopyAttributeValue(element, attribute, &value) != kAXErrorSuccess || !value) return NO;
+    BOOL on = CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value);
+    CFRelease(value);
+    return on;
+}
+
+// The system Dock lists real windows, including minimized ones, and skips
+// the tiny panels some apps keep around.
+static BOOL axWindowListed(AXUIElementRef window) {
+    if (axFlag(window, kAXMinimizedAttribute)) return YES;
+    CFTypeRef value = NULL;
+    if (AXUIElementCopyAttributeValue(window, kAXSizeAttribute, &value) != kAXErrorSuccess || !value) return YES;
+    CGSize size = CGSizeZero;
+    BOOL ok = AXValueGetValue((AXValueRef)value, kAXValueCGSizeType, &size);
+    CFRelease(value);
+    if (!ok) return YES;
+    return size.width >= 80 && size.height >= 40;
+}
+
+static NSString *axTabTitle(AXUIElementRef element) {
+    NSString *title = menuTitle(axString(element, kAXTitleAttribute));
+    if (title) return title;
+    return menuTitle(axString(element, kAXDescriptionAttribute));
+}
+
+static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutableArray<AXNode *> *tabs) {
+    if (depth > 16 || tabs.count > 80) return;
+    NSString *role = axString(element, kAXRoleAttribute) ?: @"";
+    NSString *sub = axString(element, kAXSubroleAttribute) ?: @"";
+    if ([role isEqualToString:@"AXWebArea"]) return;
+    BOOL tabGroup = inTabs || [role isEqualToString:@"AXTabGroup"] || [sub isEqualToString:@"AXTabGroup"] || [role isEqualToString:@"AXTab"];
+    BOOL isTab = [role isEqualToString:@"AXTab"] || [sub isEqualToString:@"AXTabButton"]
+        || (tabGroup && [role isEqualToString:@"AXRadioButton"]);
+    if (isTab && axTabTitle(element)) [tabs addObject:[[AXNode alloc] initWithElement:element]];
+    BOOL dive = [role isEqualToString:@"AXWindow"] || [role isEqualToString:@"AXGroup"] || [role isEqualToString:@"AXSplitGroup"]
+        || [role isEqualToString:@"AXToolbar"] || [role isEqualToString:@"AXScrollArea"] || [role isEqualToString:@"AXList"]
+        || [role containsString:@"Tab"] || role.length == 0;
+    if (!dive && !tabGroup) return;
+    CFArrayRef kids = NULL;
+    if (AXUIElementCopyAttributeValue(element, kAXChildrenAttribute, (CFTypeRef *)&kids) != kAXErrorSuccess || !kids) return;
+    for (CFIndex i = 0, n = CFArrayGetCount(kids); i < n && tabs.count < 80; i++) {
+        collectTabs((AXUIElementRef)CFArrayGetValueAtIndex(kids, i), depth + 1, tabGroup, tabs);
+    }
+    CFRelease(kids);
+}
+
 @implementation DockController {
     NSMutableArray<NSWindow *> *_strips;
     EdgePanel *_dock;
@@ -331,6 +438,10 @@ static DockController *controller;
     [self buildDock];
     [self rebuildStrips];
     [self burySystemDock];
+    [self guardSystemDockEdge];
+    NSDictionary *options = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
+    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    fprintf(stderr, "omacosy-dock: accessibility %d\n", AXIsProcessTrusted());
     NSNotificationCenter *nc = NSWorkspace.sharedWorkspace.notificationCenter;
     for (NSNotificationName name in @[NSWorkspaceDidLaunchApplicationNotification,
                                       NSWorkspaceDidTerminateApplicationNotification,
@@ -417,7 +528,7 @@ static DockController *controller;
     for (NSWindow *strip in _strips) [strip orderOut:nil];
     [_strips removeAllObjects];
     for (NSScreen *screen in NSScreen.screens) {
-        NSRect frame = NSMakeRect(screen.frame.origin.x, screen.frame.origin.y, screen.frame.size.width, 3);
+        NSRect frame = NSMakeRect(screen.frame.origin.x, screen.frame.origin.y, screen.frame.size.width, kStripHeight);
         EdgeWindow *window = [[EdgeWindow alloc] initWithContentRect:frame
                                                            styleMask:NSWindowStyleMaskBorderless
                                                              backing:NSBackingStoreBuffered defer:NO];
@@ -768,11 +879,99 @@ static DockController *controller;
     return item;
 }
 
+- (BOOL)browserTile:(DockTile *)tile {
+    NSString *bid = tile.bundleID ?: @"";
+    return [bid isEqualToString:@"com.google.Chrome"]
+        || [bid isEqualToString:@"com.google.Chrome.canary"]
+        || [bid isEqualToString:@"com.apple.Safari"]
+        || [bid isEqualToString:@"org.mozilla.firefox"]
+        || [bid isEqualToString:@"com.microsoft.edgemac"]
+        || [bid isEqualToString:@"com.brave.Browser"]
+        || [bid isEqualToString:@"company.thebrowser.Browser"]
+        || [bid isEqualToString:@"org.chromium.Chromium"];
+}
+
+- (NSMenuItem *)targetItem:(NSString *)title window:(AXNode *)window tab:(AXNode *)tab pid:(pid_t)pid selected:(BOOL)selected {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:@selector(menuFocusTarget:) keyEquivalent:@""];
+    item.target = self;
+    item.enabled = YES;
+    if (selected) item.state = NSControlStateValueOn;
+    DockTarget *target = [DockTarget new];
+    target.pid = pid;
+    target.windowNode = window;
+    target.tabNode = tab;
+    item.representedObject = target;
+    return item;
+}
+
+- (void)addWindowItems:(NSMenu *)menu tile:(DockTile *)tile {
+    NSRunningApplication *app = [self runningForTile:tile];
+    if (!app || !AXIsProcessTrusted()) return;
+    AXUIElementRef application = AXUIElementCreateApplication(app.processIdentifier);
+    CFArrayRef rawWindows = NULL;
+    AXError err = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute, (CFTypeRef *)&rawWindows);
+    CFRelease(application);
+    if (err != kAXErrorSuccess || !rawWindows) return;
+    NSMutableArray<NSDictionary *> *sections = [NSMutableArray array];
+    for (CFIndex i = 0, n = CFArrayGetCount(rawWindows); i < n; i++) {
+        AXUIElementRef window = (AXUIElementRef)CFArrayGetValueAtIndex(rawWindows, i);
+        NSString *title = menuTitle(axString(window, kAXTitleAttribute));
+        if (!title.length) title = zh() ? @"未命名" : @"Untitled";
+        NSMutableArray<AXNode *> *tabs = [NSMutableArray array];
+        if ([self browserTile:tile]) collectTabs(window, 0, NO, tabs);
+        if (!tabs.count && !axWindowListed(window)) continue;
+        [sections addObject:@{
+            @"title": title,
+            @"window": [[AXNode alloc] initWithElement:window],
+            @"tabs": tabs,
+        }];
+    }
+    CFRelease(rawWindows);
+    if (!sections.count) return;
+    [menu addItem:[NSMenuItem separatorItem]];
+    BOOL group = sections.count > 1;
+    for (NSDictionary *section in sections) {
+        NSString *title = section[@"title"];
+        AXNode *window = section[@"window"];
+        NSArray<AXNode *> *tabs = section[@"tabs"];
+        if (tabs.count && group) {
+            NSMenu *sub = [NSMenu new];
+            sub.autoenablesItems = NO;
+            for (AXNode *tab in tabs) {
+                NSString *tabTitle = axTabTitle(tab.element);
+                if (!tabTitle) continue;
+                [sub addItem:[self targetItem:tabTitle window:window tab:tab pid:app.processIdentifier selected:axSelected(tab.element)]];
+            }
+            NSMenuItem *parent = [[NSMenuItem alloc] initWithTitle:(title.length ? title : (zh() ? @"窗口" : @"Window")) action:NULL keyEquivalent:@""];
+            parent.submenu = sub;
+            [menu addItem:parent];
+        } else if (tabs.count) {
+            for (AXNode *tab in tabs) {
+                NSString *tabTitle = axTabTitle(tab.element);
+                if (!tabTitle) continue;
+                [menu addItem:[self targetItem:tabTitle window:window tab:tab pid:app.processIdentifier selected:axSelected(tab.element)]];
+            }
+        } else {
+            [menu addItem:[self targetItem:title window:window tab:nil pid:app.processIdentifier selected:NO]];
+        }
+    }
+}
+
 - (NSMenu *)menuForTile:(DockTile *)tile {
     BOOL chinese = zh();
     NSMenu *menu = [NSMenu new];
     menu.autoenablesItems = NO;
+    menu.delegate = self;
     [menu addItem:[self item:(chinese ? @"打开" : @"Open") action:@selector(menuOpen:) tile:tile]];
+    if (tile.running && !AXIsProcessTrusted()) {
+        NSMenuItem *allow = [[NSMenuItem alloc] initWithTitle:(chinese ? @"允许辅助功能以列出窗口和标签页" : @"Allow Accessibility to list windows and tabs")
+                                                       action:@selector(menuAllowAccessibility:)
+                                                keyEquivalent:@""];
+        allow.target = self;
+        [menu addItem:allow];
+    } else {
+        [self addWindowItems:menu tile:tile];
+    }
 
     NSMenu *options = [NSMenu new];
     options.autoenablesItems = NO;
@@ -790,13 +989,47 @@ static DockController *controller;
     if (tile.running) {
         [menu addItem:[NSMenuItem separatorItem]];
         if (tile.focused) [menu addItem:[self item:(chinese ? @"隐藏" : @"Hide") action:@selector(menuHide:) tile:tile]];
-        [menu addItem:[self item:(chinese ? @"退出" : @"Quit") action:@selector(menuQuit:) tile:tile]];
-        [menu addItem:[self item:(chinese ? @"强制退出" : @"Force Quit") action:@selector(menuForceQuit:) tile:tile]];
+        BOOL option = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0;
+        [menu addItem:[self item:(option ? (chinese ? @"强制退出" : @"Force Quit") : (chinese ? @"退出" : @"Quit"))
+                            action:(option ? @selector(menuForceQuit:) : @selector(menuQuit:))
+                              tile:tile]];
     }
     return menu;
 }
 
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+    BOOL option = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0;
+    BOOL chinese = zh();
+    for (NSMenuItem *item in menu.itemArray) {
+        if (item.action != @selector(menuQuit:) && item.action != @selector(menuForceQuit:)) continue;
+        item.title = option ? (chinese ? @"强制退出" : @"Force Quit") : (chinese ? @"退出" : @"Quit");
+        item.action = option ? @selector(menuForceQuit:) : @selector(menuQuit:);
+    }
+}
+
+- (void)menuAllowAccessibility:(NSMenuItem *)item {
+    NSDictionary *options = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
+    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"];
+    [NSWorkspace.sharedWorkspace openURL:url];
+}
+
 - (void)menuOpen:(NSMenuItem *)item { [self openTile:item.representedObject]; }
+
+- (void)menuFocusTarget:(NSMenuItem *)item {
+    DockTarget *target = item.representedObject;
+    NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:target.pid];
+    if ([app respondsToSelector:@selector(activateFromApplication:options:)]) {
+        [app activateFromApplication:NSRunningApplication.currentApplication options:NSApplicationActivateAllWindows];
+    } else {
+        [app activateWithOptions:NSApplicationActivateAllWindows];
+    }
+    if (target.windowNode.element) {
+        AXUIElementSetAttributeValue(target.windowNode.element, CFSTR("AXMinimized"), kCFBooleanFalse);
+        AXUIElementPerformAction(target.windowNode.element, kAXRaiseAction);
+    }
+    if (target.tabNode.element) AXUIElementPerformAction(target.tabNode.element, kAXPressAction);
+}
 
 - (void)menuReveal:(NSMenuItem *)item {
     DockTile *tile = item.representedObject;
@@ -861,24 +1094,148 @@ static DockController *controller;
     });
 }
 
-- (void)burySystemDock {
-    CFPropertyListRef raw = CFPreferencesCopyAppValue(CFSTR("autohide-delay"), CFSTR("com.apple.dock"));
-    double delay = 0.05;
-    if (raw && CFGetTypeID(raw) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)raw, kCFNumberDoubleType, &delay);
+- (double)dockPref:(CFStringRef)key fallback:(double)fallback {
+    CFPropertyListRef raw = CFPreferencesCopyAppValue(key, CFSTR("com.apple.dock"));
+    double value = fallback;
+    if (raw && CFGetTypeID(raw) == CFNumberGetTypeID()) CFNumberGetValue((CFNumberRef)raw, kCFNumberDoubleType, &value);
     if (raw) CFRelease(raw);
-    if (delay >= 30) return;
-    NSString *marker = [NSHomeDirectory() stringByAppendingPathComponent:@".local/state/omacosy/dock-autohide-delay"];
+    return value;
+}
+
+- (void)rememberDockPref:(NSString *)name value:(double)value {
+    NSString *marker = [[NSHomeDirectory() stringByAppendingPathComponent:@".local/state/omacosy"] stringByAppendingPathComponent:name];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:marker]) return;
     [[NSFileManager defaultManager] createDirectoryAtPath:marker.stringByDeletingLastPathComponent
                               withIntermediateDirectories:YES attributes:nil error:nil];
-    [[NSString stringWithFormat:@"%g", delay] writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    CFPreferencesSetAppValue(CFSTR("autohide-delay"), (__bridge CFNumberRef)@(1000.0), CFSTR("com.apple.dock"));
-    CFPreferencesSetAppValue(CFSTR("autohide"), kCFBooleanTrue, CFSTR("com.apple.dock"));
+    [[NSString stringWithFormat:@"%g", value] writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
+- (void)burySystemDock {
+    // autohide-delay stops the normal space. Fullscreen uses a separate
+    // edge gesture; stretching the slide makes that gesture finish off screen.
+    double delay = [self dockPref:CFSTR("autohide-delay") fallback:0.05];
+    double modifier = [self dockPref:CFSTR("autohide-time-modifier") fallback:0.35];
+    BOOL changed = NO;
+    if (delay < 30) {
+        [self rememberDockPref:@"dock-autohide-delay" value:delay];
+        CFPreferencesSetAppValue(CFSTR("autohide-delay"), (__bridge CFNumberRef)@(1000.0), CFSTR("com.apple.dock"));
+        CFPreferencesSetAppValue(CFSTR("autohide"), kCFBooleanTrue, CFSTR("com.apple.dock"));
+        changed = YES;
+    }
+    if (modifier < 30) {
+        [self rememberDockPref:@"dock-autohide-time-modifier" value:modifier];
+        CFPreferencesSetAppValue(CFSTR("autohide-time-modifier"), (__bridge CFNumberRef)@(1000.0), CFSTR("com.apple.dock"));
+        changed = YES;
+    }
+    if (!changed) return;
     CFPreferencesAppSynchronize(CFSTR("com.apple.dock"));
     NSTask *kill = [NSTask new];
     kill.executableURL = [NSURL fileURLWithPath:@"/usr/bin/killall"];
     kill.arguments = @[@"Dock"];
     [kill launchAndReturnError:nil];
     note("system Dock held back");
+}
+
+// Fullscreen reveal ignores autohide-delay. It starts when the pointer
+// reaches the bottom two points, including a push that stays there.
+// Hold the pointer just inside the hit strip so that gesture never lands.
+static CFMachPortRef edgePort;
+
+static CGPoint guardBottomEdge(CGPoint p) {
+    uint32_t count = 0;
+    CGDirectDisplayID ids[8];
+    if (CGGetActiveDisplayList(8, ids, &count) != kCGErrorSuccess) return p;
+    for (uint32_t i = 0; i < count; i++) {
+        CGRect b = CGDisplayBounds(ids[i]);
+        if (p.x < CGRectGetMinX(b) - 1 || p.x > CGRectGetMaxX(b) + 1) continue;
+        CGFloat limit = CGRectGetMaxY(b) - kEdgeGuard;
+        if (p.y > limit) p.y = limit;
+        break;
+    }
+    return p;
+}
+
+static CGEventRef edgeTap(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *ref) {
+    (void)proxy;
+    (void)ref;
+    if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
+        if (edgePort) CGEventTapEnable(edgePort, true);
+        return event;
+    }
+    CGPoint p = CGEventGetLocation(event);
+    CGPoint q = guardBottomEdge(p);
+    if (q.y != p.y) CGEventSetLocation(event, q);
+    return event;
+}
+
+static SLSConnectionID slsCID;
+static NSMutableSet<NSNumber *> *hiddenDockIDs;
+
+static BOOL nearBottomEdge(CGPoint p) {
+    uint32_t count = 0;
+    CGDirectDisplayID ids[8];
+    if (CGGetActiveDisplayList(8, ids, &count) != kCGErrorSuccess) return NO;
+    for (uint32_t i = 0; i < count; i++) {
+        CGRect b = CGDisplayBounds(ids[i]);
+        if (p.x < CGRectGetMinX(b) - 1 || p.x > CGRectGetMaxX(b) + 1) continue;
+        if (p.y > CGRectGetMaxY(b) - 48) return YES;
+    }
+    return NO;
+}
+
+static void hideSystemDockChrome(void) {
+    if (!slsCID) slsCID = SLSMainConnectionID();
+    if (!hiddenDockIDs) hiddenDockIDs = [NSMutableSet set];
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID);
+    if (!list) return;
+    for (NSDictionary *window in (__bridge NSArray *)list) {
+        if (![window[(id)kCGWindowOwnerName] isEqualToString:@"Dock"]) continue;
+        NSString *name = window[(id)kCGWindowName] ?: @"";
+        NSDictionary *bounds = window[(id)kCGWindowBounds];
+        double height = [bounds[@"Height"] doubleValue];
+        double width = [bounds[@"Width"] doubleValue];
+        // The name pill is a layer in the full-screen Dock window, or a
+        // small window of its own. Mission Control is a different window.
+        BOOL chrome = [name isEqualToString:@"Dock"] || (height > 0 && height < 120 && width > 16 && width < 900);
+        if (!chrome) continue;
+        uint32_t wid = [window[(id)kCGWindowNumber] unsignedIntValue];
+        if (!wid) continue;
+        SLSSetWindowAlpha(slsCID, wid, 0);
+        [hiddenDockIDs addObject:@(wid)];
+    }
+    CFRelease(list);
+}
+
+static void restoreSystemDockChrome(void) {
+    if (!slsCID || hiddenDockIDs.count == 0) return;
+    for (NSNumber *wid in hiddenDockIDs) SLSSetWindowAlpha(slsCID, wid.unsignedIntValue, 1);
+    [hiddenDockIDs removeAllObjects];
+}
+
+- (void)guardSystemDockEdge {
+    CGEventMask mask = CGEventMaskBit(kCGEventMouseMoved)
+        | CGEventMaskBit(kCGEventLeftMouseDragged)
+        | CGEventMaskBit(kCGEventRightMouseDragged)
+        | CGEventMaskBit(kCGEventOtherMouseDragged);
+    edgePort = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, mask, edgeTap, NULL);
+    if (edgePort) {
+        CFRunLoopSourceRef src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, edgePort, 0);
+        CFRunLoopAddSource(CFRunLoopGetMain(), src, kCFRunLoopCommonModes);
+        CGEventTapEnable(edgePort, true);
+        CFRelease(src);
+    }
+    NSTimer *timer = [NSTimer timerWithTimeInterval:1.0 / 30.0 repeats:YES block:^(NSTimer *unused) {
+        (void)unused;
+        CGEventRef event = CGEventCreate(NULL);
+        if (!event) return;
+        CGPoint p = CGEventGetLocation(event);
+        CFRelease(event);
+        CGPoint q = guardBottomEdge(p);
+        if (q.y != p.y) CGWarpMouseCursorPosition(q);
+        if (nearBottomEdge(q)) hideSystemDockChrome();
+        else restoreSystemDockChrome();
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
 }
 
 @end
@@ -892,6 +1249,13 @@ int main(void) {
         dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR1, 0, dispatch_get_main_queue());
         dispatch_source_set_event_handler(src, ^{ [controller showTest]; });
         dispatch_resume(src);
+        signal(SIGTERM, SIG_IGN);
+        dispatch_source_t term = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, dispatch_get_main_queue());
+        dispatch_source_set_event_handler(term, ^{
+            restoreSystemDockChrome();
+            exit(0);
+        });
+        dispatch_resume(term);
         [controller start];
         [NSApp run];
     }

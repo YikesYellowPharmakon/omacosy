@@ -374,13 +374,24 @@ launchctl load "$HOME/Library/LaunchAgents/com.omacosy.bar.plist"
 # Bottom capsule in the bar's palette. It does not take a gap; the pointer
 # on the screen edge slides it up over the windows. clang, not swiftc:
 # the command-line tools on this machine cannot compile AppKit Swift.
-DOCK_BIN="$HOME/.local/bin/omacosy-dock"
-if [ ! -x "$DOCK_BIN" ] || [ "$REPO_DIR/helper/dock.m" -nt "$DOCK_BIN" ]; then
+# A bundle, same reason as the bar: an unbundled binary never receives an
+# Accessibility grant, so the per-app window and tab menu stayed empty.
+DOCK_APP="$HOME/.local/share/omacosy/Omacosy Dock.app"
+DOCK_BIN="$DOCK_APP/Contents/MacOS/omacosy-dock"
+if [ ! -x "$DOCK_BIN" ] \
+  || [ "$REPO_DIR/helper/dock.m" -nt "$DOCK_BIN" ] \
+  || [ "$REPO_DIR/helper/dock-info.plist" -nt "$DOCK_BIN" ]; then
   log "Building omacosy-dock"
+  mkdir -p "$DOCK_APP/Contents/MacOS"
+  cp "$REPO_DIR/helper/dock-info.plist" "$DOCK_APP/Contents/Info.plist"
   clang -fobjc-arc -O2 -framework Cocoa -framework QuartzCore -framework ApplicationServices \
+    -F /System/Library/PrivateFrameworks -framework SkyLight \
+    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$REPO_DIR/helper/dock-info.plist" \
     -o "$DOCK_BIN" "$REPO_DIR/helper/dock.m"
-  codesign -f -s - --identifier com.omacosy.dock "$DOCK_BIN" 2>/dev/null || true
+  codesign -f -s - --identifier com.omacosy.dock "$DOCK_APP" 2>/dev/null || true
 fi
+cp "$REPO_DIR/helper/dock-info.plist" "$DOCK_APP/Contents/Info.plist"
+rm -f "$HOME/.local/bin/omacosy-dock"
 cat > "$HOME/Library/LaunchAgents/com.omacosy.dock.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
