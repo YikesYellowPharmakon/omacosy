@@ -7,6 +7,30 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
+# Accessibility is stored against the signature. Ad-hoc signing changes on
+# every rebuild, so a grant for the previous binary never matches. This
+# local certificate stays the same across rebuilds.
+sign_omacosy_dock() {
+  local app="$1"
+  local name="Omacosy Dock"
+  local keychain="$HOME/Library/Keychains/login.keychain-db"
+  if ! security find-certificate -c "$name" "$keychain" >/dev/null 2>&1; then
+    local tmp
+    tmp="$(mktemp -d)"
+    openssl req -new -newkey rsa:2048 -x509 -days 3650 -nodes \
+      -subj "/CN=${name}" \
+      -addext "extendedKeyUsage=critical,codeSigning" \
+      -addext "basicConstraints=critical,CA:FALSE" \
+      -addext "keyUsage=critical,digitalSignature" \
+      -keyout "$tmp/key.pem" -out "$tmp/cert.pem"
+    openssl pkcs12 -export -legacy -inkey "$tmp/key.pem" -in "$tmp/cert.pem" \
+      -out "$tmp/cert.p12" -passout pass:omacosy
+    security import "$tmp/cert.p12" -k "$keychain" -P omacosy -A -T /usr/bin/codesign
+    rm -rf "$tmp"
+  fi
+  codesign -f --timestamp=none -s "$name" --identifier com.omacosy.dock "$app"
+}
+
 # --- 0. Manifest: record what THIS machine gains ----------------------------
 # uninstall.sh removes only what is recorded here, so tools and settings
 # the user had before omacosy are never touched. First run wins for
@@ -388,8 +412,8 @@ if [ ! -x "$DOCK_BIN" ] \
     -F /System/Library/PrivateFrameworks -framework SkyLight \
     -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$REPO_DIR/helper/dock-info.plist" \
     -o "$DOCK_BIN" "$REPO_DIR/helper/dock.m"
-  codesign -f -s - --identifier com.omacosy.dock "$DOCK_APP" 2>/dev/null || true
 fi
+sign_omacosy_dock "$DOCK_APP"
 cp "$REPO_DIR/helper/dock-info.plist" "$DOCK_APP/Contents/Info.plist"
 rm -f "$HOME/.local/bin/omacosy-dock"
 cat > "$HOME/Library/LaunchAgents/com.omacosy.dock.plist" <<PLIST

@@ -8,6 +8,8 @@
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSUIElement</key><true/>
   <key>NSAccessibilityUsageDescription</key>
-  <string>下栏需要辅助功能权限，才能像系统程序坞一样列出每个应用打开的窗口和标签页。</string>
+  <string>下栏需要辅助功能权限，才能读取系统程序坞里每个图标原来的右键菜单。</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>下栏需要读取系统程序坞里每个图标原来的右键菜单。</string>
 </dict>
 </plist>

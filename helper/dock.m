@@ -6,10 +6,82 @@
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <QuartzCore/QuartzCore.h>
+#include <dlfcn.h>
 
 typedef int SLSConnectionID;
 extern SLSConnectionID SLSMainConnectionID(void);
 extern CGError SLSSetWindowAlpha(SLSConnectionID cid, uint32_t wid, float alpha);
+
+// The real Dock menu is painted by DockHelper and cannot be moved or
+// faded from this process. Hold a still of the screen above it until the
+// copy is done, then drop the still and show our own menu.
+static NSWindow *menuCover;
+static NSScreen *menuCoverScreen;
+static CGFloat menuCoverX;
+
+static CGFloat primaryScreenHeight(void) {
+    for (NSScreen *screen in NSScreen.screens) {
+        if (fabs(screen.frame.origin.x) < 0.5 && fabs(screen.frame.origin.y) < 0.5)
+            return screen.frame.size.height;
+    }
+    return NSScreen.mainScreen.frame.size.height;
+}
+
+static void hideMenuCover(void) {
+    if (!menuCover) return;
+    [menuCover orderOut:nil];
+    menuCover = nil;
+}
+
+static void showMenuCover(void) {
+    hideMenuCover();
+    NSScreen *screen = menuCoverScreen ?: NSScreen.mainScreen;
+    if (!screen) return;
+    NSRect frame = screen.frame;
+    CGFloat width = MIN(640.0, frame.size.width);
+    CGFloat x = menuCoverX - width / 2.0;
+    if (x < frame.origin.x) x = frame.origin.x;
+    if (x + width > NSMaxX(frame)) x = NSMaxX(frame) - width;
+    NSRect cocoa = NSMakeRect(x, frame.origin.y, width, frame.size.height);
+    CGRect cg = CGRectMake(cocoa.origin.x, primaryScreenHeight() - NSMaxY(cocoa), cocoa.size.width, cocoa.size.height);
+    typedef CGImageRef (*CaptureFn)(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption);
+    static CaptureFn capture;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        capture = (CaptureFn)dlsym(RTLD_DEFAULT, "CGWindowListCreateImage");
+    });
+    if (!capture) return;
+    CGImageRef image = capture(cg, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, kCGWindowImageDefault);
+    if (!image) return;
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:cocoa
+                                                   styleMask:NSWindowStyleMaskBorderless
+                                                     backing:NSBackingStoreBuffered
+                                                       defer:NO];
+    window.opaque = YES;
+    window.hasShadow = NO;
+    window.ignoresMouseEvents = YES;
+    window.backgroundColor = NSColor.blackColor;
+    window.animationBehavior = NSWindowAnimationBehaviorNone;
+    // Above the DockHelper menu (101), below the hit strip (1001) and capsule.
+    window.level = NSPopUpMenuWindowLevel + 1;
+    window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces
+        | NSWindowCollectionBehaviorStationary
+        | NSWindowCollectionBehaviorFullScreenAuxiliary;
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, cocoa.size.width, cocoa.size.height)];
+    view.wantsLayer = YES;
+    view.layer.contents = (__bridge id)image;
+    CGFloat scale = CGImageGetWidth(image) / MAX(cocoa.size.width, 1);
+    view.layer.contentsScale = scale > 0 ? scale : 1;
+    view.layer.contentsGravity = kCAGravityResize;
+    view.layer.magnificationFilter = kCAFilterNearest;
+    view.layer.minificationFilter = kCAFilterNearest;
+    CGImageRelease(image);
+    window.contentView = view;
+    [window setFrame:cocoa display:YES];
+    [window orderFrontRegardless];
+    [CATransaction flush];
+    menuCover = window;
+}
 
 static const CGFloat kIcon = 32;
 static const CGFloat kPadX = 10;
@@ -243,10 +315,26 @@ static DockController *controller;
     if (!tile) return;
     controller.menuOpen = YES;
     [controller pointerEnteredCapsule];
+    NSPoint click = [self.window convertPointToScreen:[self convertPoint:p toView:nil]];
+    menuCoverScreen = self.window.screen;
+    menuCoverX = click.x;
     NSMenu *menu = [controller menuForTile:tile];
     EdgePanel *panel = (EdgePanel *)self.window;
     panel.allowingKey = YES;
-    [NSMenu popUpContextMenu:menu withEvent:event forView:self];
+    menu.delegate = controller;
+    // Born already above the capsule. A menu anchored on the bottom edge
+    // is presented by sliding up from the click.
+    CGFloat head = self.dragTile ? kDragHeadroom : 0;
+    NSPoint base = [self convertPoint:NSMakePoint(p.x, NSMaxY(self.bounds) - head) toView:nil];
+    NSPoint screenPoint = [self.window convertPointToScreen:base];
+    NSSize sz = menu.size;
+    if (sz.height < 1) sz.height = MAX(1, menu.numberOfItems) * 24.0;
+    screenPoint.y += sz.height;
+    NSRect vis = (self.window.screen ?: NSScreen.mainScreen).visibleFrame;
+    if (screenPoint.y > NSMaxY(vis) - 4) screenPoint.y = NSMaxY(vis) - 4;
+    if (screenPoint.x + sz.width > NSMaxX(vis) - 4) screenPoint.x = NSMaxX(vis) - 4 - sz.width;
+    if (screenPoint.x < NSMinX(vis) + 4) screenPoint.x = NSMinX(vis) + 4;
+    [menu popUpMenuPositioningItem:nil atLocation:screenPoint inView:nil];
     panel.allowingKey = NO;
     controller.menuOpen = NO;
     [controller pointerLeft];
@@ -311,6 +399,16 @@ static DockController *controller;
 @implementation DockTarget
 @end
 
+// A click in the copied system Dock menu. Replayed against the real
+// Dock item, so New Window / a tab / Quit do what the system menu does.
+@interface SystemMenuPick : NSObject
+@property(copy) NSString *itemTitle;
+@property(copy) NSString *itemPath;
+@property(copy) NSArray<NSNumber *> *indexes;
+@end
+@implementation SystemMenuPick
+@end
+
 static NSString *axString(AXUIElementRef element, CFStringRef attribute) {
     CFTypeRef value = NULL;
     if (!element || AXUIElementCopyAttributeValue(element, attribute, &value) != kAXErrorSuccess || !value) return nil;
@@ -340,6 +438,25 @@ static BOOL axFlag(AXUIElementRef element, CFStringRef attribute) {
     CFTypeRef value = NULL;
     if (!element || AXUIElementCopyAttributeValue(element, attribute, &value) != kAXErrorSuccess || !value) return NO;
     BOOL on = CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value);
+    CFRelease(value);
+    return on;
+}
+
+static NSString *axURLPath(AXUIElementRef element) {
+    CFTypeRef value = NULL;
+    if (!element || AXUIElementCopyAttributeValue(element, CFSTR("AXURL"), &value) != kAXErrorSuccess || !value) return nil;
+    NSString *path = nil;
+    if (CFGetTypeID(value) == CFURLGetTypeID()) path = [(__bridge NSURL *)value path];
+    else if (CFGetTypeID(value) == CFStringGetTypeID()) path = [NSURL URLWithString:(__bridge NSString *)value].path;
+    CFRelease(value);
+    return path.length ? normPath(path) : nil;
+}
+
+static BOOL axEnabled(AXUIElementRef element) {
+    CFTypeRef value = NULL;
+    if (!element || AXUIElementCopyAttributeValue(element, kAXEnabledAttribute, &value) != kAXErrorSuccess || !value) return YES;
+    BOOL on = YES;
+    if (CFGetTypeID(value) == CFBooleanGetTypeID()) on = CFBooleanGetValue(value);
     CFRelease(value);
     return on;
 }
@@ -439,8 +556,10 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
     [self rebuildStrips];
     [self burySystemDock];
     [self guardSystemDockEdge];
-    NSDictionary *options = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
-    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    if (!AXIsProcessTrusted()) {
+        NSDictionary *options = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
+        AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    }
     fprintf(stderr, "omacosy-dock: accessibility %d\n", AXIsProcessTrusted());
     NSNotificationCenter *nc = NSWorkspace.sharedWorkspace.notificationCenter;
     for (NSNotificationName name in @[NSWorkspaceDidLaunchApplicationNotification,
@@ -957,14 +1076,500 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
     }
 }
 
+- (AXUIElementRef)systemDockItemForTile:(DockTile *)tile {
+    if (!AXIsProcessTrusted()) return NULL;
+    NSRunningApplication *dock = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.dock"].firstObject;
+    if (!dock) return NULL;
+    AXUIElementRef app = AXUIElementCreateApplication(dock.processIdentifier);
+    CFTypeRef top = NULL;
+    AXUIElementCopyAttributeValue(app, kAXChildrenAttribute, &top);
+    CFRelease(app);
+    if (!top || CFArrayGetCount(top) == 0) {
+        if (top) CFRelease(top);
+        return NULL;
+    }
+    AXUIElementRef list = (AXUIElementRef)CFArrayGetValueAtIndex(top, 0);
+    CFTypeRef items = NULL;
+    AXUIElementCopyAttributeValue(list, kAXChildrenAttribute, &items);
+    CFRelease(top);
+    if (!items) return NULL;
+    NSString *wantPath = tile.url ? normPath(tile.url.path) : @"";
+    AXUIElementRef found = NULL;
+    for (CFIndex i = 0, n = CFArrayGetCount(items); i < n; i++) {
+        AXUIElementRef item = (AXUIElementRef)CFArrayGetValueAtIndex(items, i);
+        NSString *title = axString(item, kAXTitleAttribute);
+        NSString *path = axURLPath(item) ?: @"";
+        BOOL pathMatch = wantPath.length && [path isEqualToString:wantPath];
+        BOOL titleMatch = tile.name.length && [title isEqualToString:tile.name];
+        if (!pathMatch && !titleMatch) continue;
+        if (!found || pathMatch) {
+            if (found) CFRelease(found);
+            CFRetain(item);
+            found = item;
+            if (pathMatch) break;
+        }
+    }
+    CFRelease(items);
+    return found;
+}
+
+- (AXUIElementRef)menuChildOf:(AXUIElementRef)element {
+    CFTypeRef kids = NULL;
+    if (!element || AXUIElementCopyAttributeValue(element, kAXChildrenAttribute, &kids) != kAXErrorSuccess || !kids) return NULL;
+    AXUIElementRef menu = NULL;
+    for (CFIndex i = 0, n = CFArrayGetCount(kids); i < n; i++) {
+        AXUIElementRef kid = (AXUIElementRef)CFArrayGetValueAtIndex(kids, i);
+        if ([axString(kid, kAXRoleAttribute) isEqualToString:@"AXMenu"]) {
+            CFRetain(kid);
+            menu = kid;
+            break;
+        }
+    }
+    CFRelease(kids);
+    return menu;
+}
+
+- (void)fillMenu:(NSMenu *)menu fromAXMenu:(AXUIElementRef)axMenu tile:(DockTile *)tile prefix:(NSArray<NSNumber *> *)prefix {
+    CFTypeRef kids = NULL;
+    if (AXUIElementCopyAttributeValue(axMenu, kAXChildrenAttribute, &kids) != kAXErrorSuccess || !kids) return;
+    NSInteger index = 0;
+    for (CFIndex i = 0, n = CFArrayGetCount(kids); i < n; i++) {
+        AXUIElementRef kid = (AXUIElementRef)CFArrayGetValueAtIndex(kids, i);
+        if (![axString(kid, kAXRoleAttribute) isEqualToString:@"AXMenuItem"]) continue;
+        NSArray<NSNumber *> *path = [prefix arrayByAddingObject:@(index)];
+        index++;
+        NSString *title = axString(kid, kAXTitleAttribute) ?: @"";
+        if (!title.length) {
+            [menu addItem:[NSMenuItem separatorItem]];
+            continue;
+        }
+        AXUIElementRef sub = [self menuChildOf:kid];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:(sub ? NULL : @selector(menuPerformSystem:)) keyEquivalent:@""];
+        item.target = self;
+        item.enabled = axEnabled(kid);
+        if (axString(kid, CFSTR("AXMenuItemMarkChar")).length) item.state = NSControlStateValueOn;
+        if (sub) {
+            NSMenu *child = [NSMenu new];
+            child.autoenablesItems = NO;
+            [self fillMenu:child fromAXMenu:sub tile:tile prefix:path];
+            item.submenu = child;
+            CFRelease(sub);
+        } else {
+            SystemMenuPick *pick = [SystemMenuPick new];
+            pick.itemTitle = tile.name;
+            pick.itemPath = normPath(tile.url.path);
+            pick.indexes = path;
+            item.representedObject = pick;
+        }
+        [menu addItem:item];
+    }
+    CFRelease(kids);
+}
+
+- (void)closeSystemMenu:(AXUIElementRef)menu {
+    if (menu && AXUIElementPerformAction(menu, CFSTR("AXCancel")) == kAXErrorSuccess) return;
+    CGEventRef down = CGEventCreateKeyboardEvent(NULL, 53, true);
+    CGEventRef up = CGEventCreateKeyboardEvent(NULL, 53, false);
+    if (down) CGEventPost(kCGHIDEventTap, down);
+    if (up) CGEventPost(kCGHIDEventTap, up);
+    if (down) CFRelease(down);
+    if (up) CFRelease(up);
+    NSDate *until = [NSDate dateWithTimeIntervalSinceNow:0.05];
+    while ([NSApp nextEventMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp untilDate:until inMode:NSDefaultRunLoopMode dequeue:YES]) {
+    }
+}
+
+- (void)parkMenuOffscreen:(AXUIElementRef)menu {
+    if (!menu) return;
+    CGPoint away = CGPointMake(-4000, -4000);
+    AXValueRef point = AXValueCreate((AXValueType)kAXValueCGPointType, &away);
+    if (!point) return;
+    AXUIElementSetAttributeValue(menu, kAXPositionAttribute, point);
+    CFRelease(point);
+}
+
+- (AXUIElementRef)populatedMenuOfDockItem:(AXUIElementRef)item {
+    AXUIElementRef menu = NULL;
+    long previous = -1;
+    for (int attempt = 0; attempt < 20; attempt++) {
+        if (attempt) usleep(8 * 1000);
+        if (menu) CFRelease(menu);
+        menu = [self menuChildOf:item];
+        if (menu) [self parkMenuOffscreen:menu];
+        long count = -1;
+        if (menu) {
+            CFTypeRef kids = NULL;
+            if (AXUIElementCopyAttributeValue(menu, kAXChildrenAttribute, &kids) == kAXErrorSuccess && kids) {
+                count = CFArrayGetCount(kids);
+                CFRelease(kids);
+            }
+        }
+        if (count > 0 && count == previous) return menu;
+        previous = count;
+    }
+    if (!menu) return NULL;
+    CFTypeRef kids = NULL;
+    long count = 0;
+    if (AXUIElementCopyAttributeValue(menu, kAXChildrenAttribute, &kids) == kAXErrorSuccess && kids) {
+        count = CFArrayGetCount(kids);
+        CFRelease(kids);
+    }
+    if (count <= 0) {
+        CFRelease(menu);
+        return NULL;
+    }
+    return menu;
+}
+
+- (NSMenu *)systemDockMenuForTile:(DockTile *)tile {
+    if (!AXIsProcessTrusted()) return nil;
+    AXUIElementRef item = [self systemDockItemForTile:tile];
+    if (!item) return nil;
+    NSMenu *built = nil;
+    showMenuCover();
+    if (AXUIElementPerformAction(item, CFSTR("AXShowMenu")) == kAXErrorSuccess) {
+        AXUIElementRef menu = [self populatedMenuOfDockItem:item];
+        if (menu) {
+            [self parkMenuOffscreen:menu];
+            built = [NSMenu new];
+            built.autoenablesItems = NO;
+            [self fillMenu:built fromAXMenu:menu tile:tile prefix:@[]];
+            [self closeSystemMenu:menu];
+            CFRelease(menu);
+            if (!built.itemArray.count) built = nil;
+        } else {
+            [self closeSystemMenu:NULL];
+        }
+    }
+    hideMenuCover();
+    CFRelease(item);
+    return built;
+}
+
+- (NSMenu *)menuFromEventLines:(NSArray<NSString *> *)lines tile:(DockTile *)tile {
+    NSMenu *root = [NSMenu new];
+    root.autoenablesItems = NO;
+    NSMutableDictionary<NSString *, NSMenu *> *menus = [NSMutableDictionary dictionary];
+    menus[@""] = root;
+    for (NSString *line in lines) {
+        NSArray<NSString *> *parts = [line componentsSeparatedByString:@"\t"];
+        if (parts.count < 4) continue;
+        NSString *path = parts[0];
+        NSString *title = parts[1];
+        BOOL enabled = ![parts[2] isEqualToString:@"0"];
+        BOOL marked = [parts[3] isEqualToString:@"1"];
+        NSString *parent = @"";
+        NSString *leaf = path;
+        NSRange dot = [path rangeOfString:@"." options:NSBackwardsSearch];
+        if (dot.location != NSNotFound) {
+            parent = [path substringToIndex:dot.location];
+            leaf = [path substringFromIndex:dot.location + 1];
+        }
+        NSMenu *host = menus[parent];
+        if (!host) continue;
+        if (!title.length) {
+            [host addItem:[NSMenuItem separatorItem]];
+            continue;
+        }
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:@selector(menuPerformSystem:) keyEquivalent:@""];
+        item.target = self;
+        item.enabled = enabled;
+        if (marked) item.state = NSControlStateValueOn;
+        SystemMenuPick *pick = [SystemMenuPick new];
+        pick.itemTitle = tile.name;
+        pick.itemPath = tile.url ? normPath(tile.url.path) : @"";
+        NSMutableArray<NSNumber *> *indexes = [NSMutableArray array];
+        for (NSString *piece in [path componentsSeparatedByString:@"."]) [indexes addObject:@(piece.integerValue)];
+        pick.indexes = indexes;
+        item.representedObject = pick;
+        [host addItem:item];
+        NSMenu *child = [NSMenu new];
+        child.autoenablesItems = NO;
+        item.submenu = child;
+        menus[path] = child;
+        (void)leaf;
+    }
+    // Drop empty submenus so a plain command stays a command.
+    for (NSString *line in lines) {
+        NSArray<NSString *> *parts = [line componentsSeparatedByString:@"\t"];
+        if (parts.count < 2 || !parts[1].length) continue;
+        NSMenu *child = menus[parts[0]];
+        if (child.itemArray.count) continue;
+        for (NSMenuItem *item in root.itemArray) {
+            if (item.submenu == child) item.submenu = nil;
+        }
+        for (NSMenu *menu in menus.allValues) {
+            for (NSMenuItem *item in menu.itemArray) {
+                if (item.submenu == child) item.submenu = nil;
+            }
+        }
+    }
+    return root.itemArray.count ? root : nil;
+}
+
+- (NSMenu *)systemDockMenuViaEvents:(DockTile *)tile {
+    NSString *name = [tile.name stringByReplacingOccurrencesOfString:@"\"" withString:@""] ?: @"";
+    NSString *path = tile.url ? normPath(tile.url.path) : @"";
+    path = [path stringByReplacingOccurrencesOfString:@"\"" withString:@""];
+    NSString *source = [NSString stringWithFormat:@"\
+set menuRows to {}\n\
+tell application \"System Events\"\n\
+  tell process \"Dock\"\n\
+    set targetItem to missing value\n\
+    set titleItem to missing value\n\
+    repeat with e in UI elements of list 1\n\
+      if \"%@\" is not \"\" then\n\
+        try\n\
+          set u to value of attribute \"AXURL\" of e\n\
+          if (u as text) contains \"%@\" then\n\
+            set targetItem to e\n\
+            exit repeat\n\
+          end if\n\
+        end try\n\
+      end if\n\
+      if titleItem is missing value and (name of e) = \"%@\" then set titleItem to e\n\
+    end repeat\n\
+    if targetItem is missing value then set targetItem to titleItem\n\
+    if targetItem is missing value then return \"\"\n\
+    perform action \"AXShowMenu\" of targetItem\n\
+    set menuEl to missing value\n\
+    repeat 5 times\n\
+      set n to 0\n\
+      repeat with k in UI elements of targetItem\n\
+        if (role of k) = \"AXMenu\" then\n\
+          set menuEl to k\n\
+          set n to (count of UI elements of k)\n\
+        end if\n\
+      end repeat\n\
+      if n > 0 then exit repeat\n\
+      delay 0.05\n\
+    end repeat\n\
+    repeat with k in UI elements of targetItem\n\
+      if (role of k) = \"AXMenu\" then\n\
+        set i to 0\n\
+        repeat with itemEl in UI elements of k\n\
+          if (role of itemEl) = \"AXMenuItem\" then\n\
+            set t to \"\"\n\
+            try\n\
+              set n to name of itemEl\n\
+              if n is not missing value then set t to n\n\
+            end try\n\
+            set en to \"1\"\n\
+            try\n\
+              if (value of attribute \"AXEnabled\" of itemEl) is false then set en to \"0\"\n\
+            end try\n\
+            set mk to \"0\"\n\
+            try\n\
+              set mark to value of attribute \"AXMenuItemMarkChar\" of itemEl\n\
+              if mark is not missing value and (mark as text) is not \"\" then set mk to \"1\"\n\
+            end try\n\
+            set end of menuRows to ((i as text) & tab & t & tab & en & tab & mk)\n\
+            set j to 0\n\
+            repeat with sub in UI elements of itemEl\n\
+              if (role of sub) = \"AXMenu\" then\n\
+                repeat with subEl in UI elements of sub\n\
+                  if (role of subEl) = \"AXMenuItem\" then\n\
+                    set subTitle to \"\"\n\
+                    try\n\
+                      set subName to name of subEl\n\
+                      if subName is not missing value then set subTitle to subName\n\
+                    end try\n\
+                    set subEnabled to \"1\"\n\
+                    try\n\
+                      if (value of attribute \"AXEnabled\" of subEl) is false then set subEnabled to \"0\"\n\
+                    end try\n\
+                    set subMarked to \"0\"\n\
+                    try\n\
+                      set subMark to value of attribute \"AXMenuItemMarkChar\" of subEl\n\
+                      if subMark is not missing value and (subMark as text) is not \"\" then set subMarked to \"1\"\n\
+                    end try\n\
+                    set end of menuRows to ((i as text) & \".\" & (j as text) & tab & subTitle & tab & subEnabled & tab & subMarked)\n\
+                    set j to j + 1\n\
+                  end if\n\
+                end repeat\n\
+              end if\n\
+            end repeat\n\
+            set i to i + 1\n\
+          end if\n\
+        end repeat\n\
+      end if\n\
+    end repeat\n\
+    if menuEl is not missing value then\n\
+      try\n\
+        perform action \"AXCancel\" of menuEl\n\
+      end try\n\
+    end if\n\
+  end tell\n\
+  set AppleScript's text item delimiters to linefeed\n\
+  return menuRows as text\n\
+end tell\n", path, path, name];
+    NSAppleScript *script = [[NSAppleScript alloc] initWithSource:source];
+    if (!script) return nil;
+    NSDictionary *error = nil;
+    NSAppleEventDescriptor *result = [script executeAndReturnError:&error];
+    if (error) {
+        static BOOL logged = NO;
+        if (!logged) {
+            logged = YES;
+            fprintf(stderr, "omacosy-dock: system menu %s\n", error.description.UTF8String ?: "unavailable");
+        }
+        return nil;
+    }
+    NSString *text = result.stringValue ?: @"";
+    if (!text.length) return nil;
+    return [self menuFromEventLines:[text componentsSeparatedByString:@"\n"] tile:tile];
+}
+
+- (void)menuPerformSystemViaEvents:(NSMenuItem *)item {
+    SystemMenuPick *pick = item.representedObject;
+    if (![pick isKindOfClass:SystemMenuPick.class] || !pick.indexes.count) return;
+    NSString *name = [pick.itemTitle stringByReplacingOccurrencesOfString:@"\"" withString:@""] ?: @"";
+    NSString *path = [pick.itemPath stringByReplacingOccurrencesOfString:@"\"" withString:@""] ?: @"";
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    for (NSNumber *index in pick.indexes) [parts addObject:index.stringValue];
+    NSString *indexPath = [parts componentsJoinedByString:@"."];
+    NSString *source = [NSString stringWithFormat:@"\
+tell application \"System Events\"\n\
+  tell process \"Dock\"\n\
+    set targetItem to missing value\n\
+    set titleItem to missing value\n\
+    repeat with e in UI elements of list 1\n\
+      if \"%@\" is not \"\" then\n\
+        try\n\
+          set u to value of attribute \"AXURL\" of e\n\
+          if (u as text) contains \"%@\" then\n\
+            set targetItem to e\n\
+            exit repeat\n\
+          end if\n\
+        end try\n\
+      end if\n\
+      if titleItem is missing value and (name of e) = \"%@\" then set titleItem to e\n\
+    end repeat\n\
+    if targetItem is missing value then set targetItem to titleItem\n\
+    if targetItem is missing value then return\n\
+    perform action \"AXShowMenu\" of targetItem\n\
+    set menuEl to missing value\n\
+    repeat 5 times\n\
+      set seen to 0\n\
+      repeat with k in UI elements of targetItem\n\
+        if (role of k) = \"AXMenu\" then\n\
+          set menuEl to k\n\
+          set seen to (count of UI elements of k)\n\
+        end if\n\
+      end repeat\n\
+      if seen > 0 then exit repeat\n\
+      delay 0.05\n\
+    end repeat\n\
+    if menuEl is missing value then return\n\
+    set AppleScript's text item delimiters to \".\"\n\
+    set parts to text items of \"%@\"\n\
+    set AppleScript's text item delimiters to \"\"\n\
+    set node to menuEl\n\
+    set picked to missing value\n\
+    repeat with part in parts\n\
+      set want to part as integer\n\
+      set seen to 0\n\
+      set picked to missing value\n\
+      repeat with itemEl in UI elements of node\n\
+        if (role of itemEl) = \"AXMenuItem\" then\n\
+          if seen = want then\n\
+            set picked to itemEl\n\
+            exit repeat\n\
+          end if\n\
+          set seen to seen + 1\n\
+        end if\n\
+      end repeat\n\
+      if picked is missing value then return\n\
+      set nextMenu to missing value\n\
+      repeat with sub in UI elements of picked\n\
+        if (role of sub) = \"AXMenu\" then set nextMenu to sub\n\
+      end repeat\n\
+      if nextMenu is not missing value then set node to nextMenu\n\
+    end repeat\n\
+    if picked is not missing value then perform action \"AXPress\" of picked\n\
+  end tell\n\
+end tell\n", path, path, name, indexPath];
+    NSAppleScript *script = [[NSAppleScript alloc] initWithSource:source];
+    NSDictionary *error = nil;
+    [script executeAndReturnError:&error];
+    if (error) {
+        static BOOL logged = NO;
+        if (!logged) {
+            logged = YES;
+            fprintf(stderr, "omacosy-dock: system menu press %s\n", error.description.UTF8String ?: "unavailable");
+        }
+    }
+}
+
+- (void)menuPerformSystem:(NSMenuItem *)item {
+    SystemMenuPick *pick = item.representedObject;
+    if (![pick isKindOfClass:SystemMenuPick.class]) return;
+    if (!AXIsProcessTrusted()) return;
+    DockTile *tile = [DockTile new];
+    tile.name = pick.itemTitle;
+    tile.url = pick.itemPath.length ? [NSURL fileURLWithPath:pick.itemPath] : nil;
+    AXUIElementRef dockItem = [self systemDockItemForTile:tile];
+    if (!dockItem) return;
+    showMenuCover();
+    if (AXUIElementPerformAction(dockItem, CFSTR("AXShowMenu")) != kAXErrorSuccess) {
+        hideMenuCover();
+        CFRelease(dockItem);
+        return;
+    }
+    AXUIElementRef menu = [self populatedMenuOfDockItem:dockItem];
+    if (!menu) {
+        [self closeSystemMenu:NULL];
+        hideMenuCover();
+        CFRelease(dockItem);
+        return;
+    }
+    AXUIElementRef at = menu;
+    for (NSNumber *index in pick.indexes) {
+        if (!at) break;
+        CFTypeRef kids = NULL;
+        AXUIElementRef next = NULL;
+        if (AXUIElementCopyAttributeValue(at, kAXChildrenAttribute, &kids) == kAXErrorSuccess && kids) {
+            NSInteger seen = 0;
+            for (CFIndex i = 0, n = CFArrayGetCount(kids); i < n; i++) {
+                AXUIElementRef kid = (AXUIElementRef)CFArrayGetValueAtIndex(kids, i);
+                if (![axString(kid, kAXRoleAttribute) isEqualToString:@"AXMenuItem"]) continue;
+                if (seen == index.integerValue) {
+                    CFRetain(kid);
+                    next = kid;
+                    break;
+                }
+                seen++;
+            }
+            CFRelease(kids);
+        }
+        if (at && at != menu) CFRelease(at);
+        at = next;
+        if (index != pick.indexes.lastObject) {
+            AXUIElementRef sub = [self menuChildOf:at];
+            if (at && at != menu) CFRelease(at);
+            at = sub;
+        }
+    }
+    if (at) AXUIElementPerformAction(at, kAXPressAction);
+    if (at && at != menu) CFRelease(at);
+    if (menu) {
+        [self closeSystemMenu:menu];
+        CFRelease(menu);
+    }
+    hideMenuCover();
+    CFRelease(dockItem);
+}
+
 - (NSMenu *)menuForTile:(DockTile *)tile {
+    NSMenu *systemMenu = [self systemDockMenuForTile:tile];
+    if (systemMenu) return systemMenu;
     BOOL chinese = zh();
     NSMenu *menu = [NSMenu new];
     menu.autoenablesItems = NO;
     menu.delegate = self;
     [menu addItem:[self item:(chinese ? @"打开" : @"Open") action:@selector(menuOpen:) tile:tile]];
     if (tile.running && !AXIsProcessTrusted()) {
-        NSMenuItem *allow = [[NSMenuItem alloc] initWithTitle:(chinese ? @"允许辅助功能以列出窗口和标签页" : @"Allow Accessibility to list windows and tabs")
+        NSMenuItem *allow = [[NSMenuItem alloc] initWithTitle:(chinese ? @"允许辅助功能以显示原来的右键菜单" : @"Allow Accessibility for the original menu")
                                                        action:@selector(menuAllowAccessibility:)
                                                 keyEquivalent:@""];
         allow.target = self;
@@ -997,6 +1602,21 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
     return menu;
 }
 
+- (NSRect)confinementRectForMenu:(NSMenu *)menu onScreen:(NSScreen *)screen {
+    (void)menu;
+    NSScreen *s = screen ?: _screen ?: NSScreen.mainScreen;
+    if (!s) return NSZeroRect;
+    NSRect limit = s.visibleFrame;
+    if (_shown && _dock) {
+        CGFloat floor = NSMaxY(_dock.frame);
+        if (floor > limit.origin.y && NSMaxY(limit) - floor > 40) {
+            limit.size.height = NSMaxY(limit) - floor;
+            limit.origin.y = floor;
+        }
+    }
+    return limit;
+}
+
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     BOOL option = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0;
     BOOL chinese = zh();
@@ -1008,8 +1628,15 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
 }
 
 - (void)menuAllowAccessibility:(NSMenuItem *)item {
-    NSDictionary *options = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
-    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    (void)item;
+    // One registration so the switch appears. Further clicks only open Settings,
+    // otherwise every right-click asks for assistive access again.
+    static BOOL registered = NO;
+    if (!registered && !AXIsProcessTrusted()) {
+        registered = YES;
+        NSDictionary *options = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
+        AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    }
     NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"];
     [NSWorkspace.sharedWorkspace openURL:url];
 }
