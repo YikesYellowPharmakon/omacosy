@@ -81,6 +81,29 @@ static BOOL exposeHeld(void) {
     return [text containsString:@"1"];
 }
 
+// Floating windows sit wherever they were dropped. Option-T toggles
+// them back to tiling, and their in-between tops must not move the gap
+// or the tiled layout walks down to y=41 in several reloads.
+static BOOL widIsTiled(uint32_t wid) {
+    if (!wid) return NO;
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:@"/opt/homebrew/bin/aerospace"];
+    task.arguments = @[@"list-windows", @"--all", @"--format", @"%{window-id} %{window-layout}"];
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    task.standardError = [NSPipe pipe];
+    if (![task launchAndReturnError:nil]) return YES;
+    [task waitUntilExit];
+    if (task.terminationStatus != 0) return YES;
+    NSString *out = [[NSString alloc] initWithData:[pipe.fileHandleForReading readDataToEndOfFile] encoding:NSUTF8StringEncoding];
+    NSString *prefix = [NSString stringWithFormat:@"%u ", wid];
+    for (NSString *line in [out componentsSeparatedByString:@"\n"]) {
+        if (![line hasPrefix:prefix]) continue;
+        return [line rangeOfString:@"tile"].location != NSNotFound;
+    }
+    return NO;
+}
+
 // Built-in window top must stay at y=41, just under the 34pt bar.
 // AeroSpace sometimes adds the menu-bar reservation and sometimes does
 // not, so a fixed monitor.main is wrong in one of the two layouts.
@@ -109,6 +132,7 @@ static void syncMainTopGap(void) {
 
     CFArrayRef info = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
     CGFloat windowY = CGFLOAT_MAX;
+    uint32_t measuredWid = 0;
     for (NSDictionary *window in (__bridge NSArray *)info) {
         if ([window[(id)kCGWindowLayer] integerValue] != 0) continue;
         NSString *owner = window[(id)kCGWindowOwnerName];
@@ -122,7 +146,10 @@ static void syncMainTopGap(void) {
         // one left at y=150 after a bad gap, still need a correction.
         if (rect.origin.y > 80 && browserOwner(owner)) continue;
         if (!CGRectContainsPoint(builtIn, CGPointMake(CGRectGetMidX(rect), CGRectGetMidY(rect)))) continue;
-        if (rect.origin.y < windowY) windowY = rect.origin.y;
+        if (rect.origin.y < windowY) {
+            windowY = rect.origin.y;
+            measuredWid = [window[(id)kCGWindowNumber] unsignedIntValue];
+        }
     }
     if (info) CFRelease(info);
     if (windowY > 400) {
@@ -136,6 +163,14 @@ static void syncMainTopGap(void) {
     }
     if (CFAbsoluteTimeGetCurrent() - stableSince < 0.6) return;
     if (fabs(windowY - 41) <= 2) return;
+    // y=30 is the clamp, not a tiled top. Treating it as one flips the
+    // gap between 11 and 41 and the window steps down after each toggle.
+    if (fabs(windowY - 30) <= 1) return;
+    if (!widIsTiled(measuredWid)) {
+        stableY = -1;
+        quietUntil = CFAbsoluteTimeGetCurrent() + 0.8;
+        return;
+    }
 
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".config/aerospace/aerospace.toml"];
     NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -148,7 +183,6 @@ static void syncMainTopGap(void) {
     // there walks the gap to the cap and shoves the window down the screen.
     if (lastCorrectedY >= 0 && fabs(windowY - lastCorrectedY) <= 2) return;
     int next = gap - (int)llround(windowY - 41);
-    if (fabs(windowY - 30) <= 1) next = 41;
     if (next < 0) next = 0;
     if (next > 46) next = 46;
     if (next == gap) return;
