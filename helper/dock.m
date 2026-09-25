@@ -562,6 +562,7 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
     BOOL _shown;
     int _generation;
     int _leaveToken;
+    int _awayPolls;
     NSColor *_fill, *_accent, *_muted;
     dispatch_source_t _themeSource;
     int _themeFD;
@@ -624,6 +625,7 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
     }
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(screensChanged:)
                                                  name:NSApplicationDidChangeScreenParametersNotification object:nil];
+    [nc addObserver:self selector:@selector(machineWoke:) name:NSWorkspaceDidWakeNotification object:nil];
     note("up");
 }
 
@@ -719,6 +721,32 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
 }
 
 - (void)screensChanged:(NSNotification *)note { [self rebuildStrips]; }
+
+- (void)machineWoke:(NSNotification *)note {
+    (void)note;
+    _shown = NO;
+    _awayPolls = 0;
+    [self rebuildStrips];
+}
+
+- (void)followPointer {
+    if (self.menuOpen || self.dragging) return;
+    if (_strips.count == 0) [self rebuildStrips];
+    NSPoint p = NSEvent.mouseLocation;
+    for (NSWindow *strip in _strips) {
+        if (!NSPointInRect(p, NSInsetRect(strip.frame, 0, -4))) continue;
+        _awayPolls = 0;
+        [self showOnScreen:strip.screen];
+        return;
+    }
+    if (_shown && [self pointerInside]) {
+        _awayPolls = 0;
+        return;
+    }
+    if (!_shown) return;
+    if (++_awayPolls < 8) return;
+    [self hide];
+}
 
 - (NSString *)bundleIDForURL:(NSURL *)url {
     NSString *key = normPath(url.path);
@@ -840,7 +868,10 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
 - (void)showOnScreen:(NSScreen *)screen {
     if (!screen || self.menuOpen || self.dragging) return;
     _leaveToken++;
-    if (_shown && _screen == screen) return;
+    // Sleep can order the panel out while _shown stays YES. The next
+    // pointer hit must bring it back instead of treating it as already up.
+    BOOL parked = !_dock.isVisible || !NSIntersectsRect(_dock.frame, screen.frame);
+    if (_shown && _screen == screen && !parked) return;
     NSInteger splitAt = 0;
     NSArray<DockTile *> *tiles = [self tilesSplit:&splitAt];
     if (tiles.count == 0) return;
@@ -2087,8 +2118,10 @@ static void restoreSystemDockChrome(void) {
         CFRelease(event);
         CGPoint q = guardBottomEdge(p);
         if (q.y != p.y) CGWarpMouseCursorPosition(q);
+        if (edgePort && !CGEventTapIsEnabled(edgePort)) CGEventTapEnable(edgePort, true);
         if (nearBottomEdge(q)) hideSystemDockChrome();
         else restoreSystemDockChrome();
+        [self followPointer];
     }];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
 }
