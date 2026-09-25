@@ -91,6 +91,7 @@ static void syncMainTopGap(void) {
     static CFAbsoluteTime quietUntil = 0;
     static CFAbsoluteTime stableSince = 0;
     static CGFloat stableY = -1;
+    static CGFloat lastCorrectedY = -1;
     if (CFAbsoluteTimeGetCurrent() < quietUntil) return;
     if (browserFullscreenDisplays().count > 0) {
         stableY = -1;
@@ -117,12 +118,14 @@ static void syncMainTopGap(void) {
         CGRectMakeWithDictionaryRepresentation((CFDictionaryRef)window[(id)kCGWindowBounds], &rect);
         if (rect.size.width < 400 || rect.size.height < 400) continue;
         if (rect.size.height > builtIn.size.height - 4) continue;
-        if (rect.origin.y > 80) continue;
+        // Chrome's fullscreen page sits near y=122. Other windows, including
+        // one left at y=150 after a bad gap, still need a correction.
+        if (rect.origin.y > 80 && browserOwner(owner)) continue;
         if (!CGRectContainsPoint(builtIn, CGPointMake(CGRectGetMidX(rect), CGRectGetMidY(rect)))) continue;
         if (rect.origin.y < windowY) windowY = rect.origin.y;
     }
     if (info) CFRelease(info);
-    if (windowY > 80) {
+    if (windowY > 400) {
         stableY = -1;
         return;
     }
@@ -141,9 +144,13 @@ static void syncMainTopGap(void) {
     NSTextCheckingResult *hit = [re firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
     if (!hit || hit.numberOfRanges < 2) return;
     int gap = [[text substringWithRange:[hit rangeAtIndex:1]] intValue];
+    // y=30 is AeroSpace's clamp, not a real top. Adding 11 while it stays
+    // there walks the gap to the cap and shoves the window down the screen.
+    if (lastCorrectedY >= 0 && fabs(windowY - lastCorrectedY) <= 2) return;
     int next = gap - (int)llround(windowY - 41);
+    if (fabs(windowY - 30) <= 1) next = 41;
     if (next < 0) next = 0;
-    if (next > 120) next = 120;
+    if (next > 46) next = 46;
     if (next == gap) return;
     NSString *updated = [re stringByReplacingMatchesInString:text options:0 range:NSMakeRange(0, text.length)
                                                  withTemplate:[NSString stringWithFormat:@"monitor.main = %d", next]];
@@ -154,6 +161,7 @@ static void syncMainTopGap(void) {
     [reload launchAndReturnError:nil];
     quietUntil = CFAbsoluteTimeGetCurrent() + 1.5;
     stableY = -1;
+    lastCorrectedY = windowY;
     logLine([NSString stringWithFormat:@"main top gap %d -> %d (window y %.0f)", gap, next, windowY]);
 }
 
