@@ -84,10 +84,18 @@ static BOOL exposeHeld(void) {
 // Built-in window top must stay at y=41, just under the 34pt bar.
 // AeroSpace sometimes adds the menu-bar reservation and sometimes does
 // not, so a fixed monitor.main is wrong in one of the two layouts.
-// Measure a tiled window on the built-in display and correct the gap.
+// Only a settled tiled window counts. A fullscreen page (Chrome sits
+// near y=122) and the frames while it animates back must not move the
+// gap, or reload-config walks the window down in visible steps.
 static void syncMainTopGap(void) {
     static CFAbsoluteTime quietUntil = 0;
+    static CFAbsoluteTime stableSince = 0;
+    static CGFloat stableY = -1;
     if (CFAbsoluteTimeGetCurrent() < quietUntil) return;
+    if (browserFullscreenDisplays().count > 0) {
+        stableY = -1;
+        return;
+    }
     CGRect builtIn = CGRectNull;
     uint32_t displayCount = 0;
     CGDirectDisplayID displays[8];
@@ -109,11 +117,21 @@ static void syncMainTopGap(void) {
         CGRectMakeWithDictionaryRepresentation((CFDictionaryRef)window[(id)kCGWindowBounds], &rect);
         if (rect.size.width < 400 || rect.size.height < 400) continue;
         if (rect.size.height > builtIn.size.height - 4) continue;
+        if (rect.origin.y > 80) continue;
         if (!CGRectContainsPoint(builtIn, CGPointMake(CGRectGetMidX(rect), CGRectGetMidY(rect)))) continue;
         if (rect.origin.y < windowY) windowY = rect.origin.y;
     }
     if (info) CFRelease(info);
-    if (windowY > 400) return;
+    if (windowY > 80) {
+        stableY = -1;
+        return;
+    }
+    if (stableY < 0 || fabs(windowY - stableY) > 2) {
+        stableY = windowY;
+        stableSince = CFAbsoluteTimeGetCurrent();
+        return;
+    }
+    if (CFAbsoluteTimeGetCurrent() - stableSince < 0.6) return;
     if (fabs(windowY - 41) <= 2) return;
 
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".config/aerospace/aerospace.toml"];
@@ -135,6 +153,7 @@ static void syncMainTopGap(void) {
     reload.arguments = @[@"reload-config"];
     [reload launchAndReturnError:nil];
     quietUntil = CFAbsoluteTimeGetCurrent() + 1.5;
+    stableY = -1;
     logLine([NSString stringWithFormat:@"main top gap %d -> %d (window y %.0f)", gap, next, windowY]);
 }
 
