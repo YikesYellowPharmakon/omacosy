@@ -61,13 +61,13 @@ gaps.inner.vertical = 8
 gaps.outer.left = 2
 gaps.outer.bottom = 2
 gaps.outer.right = 2
-# outer.top is the distance from the physical top of the screen.
-# The bar occupies 0..34. 41 puts the window a few points under it,
-# which is where 11 used to land when AeroSpace added it below the
-# 30pt menu-bar reservation. A value inside that reservation (11)
-# is clamped to y=30 and the window sits on the bar. The external
-# display has no reservation; 46 clears the same bar from its top.
-gaps.outer.top = [{ monitor.secondary = 46 }, 41]
+# The bar occupies 0..34. The built-in window should start at y=41.
+# AeroSpace sometimes adds a 30pt menu-bar reservation on top of this
+# number and sometimes measures from the physical top, so one fixed
+# value covers the bar in the other layout. bar-chrome measures the
+# tiled window and rewrites monitor.main until the top is y=41.
+# The external display has no reservation; 46 clears the same bar.
+gaps.outer.top = [{ monitor.main = 41 }, { monitor.secondary = 46 }, 41]
 
 # Fixed-size settings windows fight the tiler (resize -> snap back ->
 # relayout flicker); float them instead.

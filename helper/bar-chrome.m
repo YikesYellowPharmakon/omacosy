@@ -7,6 +7,7 @@
 // sets the bar window's alpha to 0 for the same geometry and puts it back
 // when the page goes away. It does not loosen the full-width test.
 
+#import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 
@@ -80,6 +81,63 @@ static BOOL exposeHeld(void) {
     return [text containsString:@"1"];
 }
 
+// Built-in window top must stay at y=41, just under the 34pt bar.
+// AeroSpace sometimes adds the menu-bar reservation and sometimes does
+// not, so a fixed monitor.main is wrong in one of the two layouts.
+// Measure a tiled window on the built-in display and correct the gap.
+static void syncMainTopGap(void) {
+    static CFAbsoluteTime quietUntil = 0;
+    if (CFAbsoluteTimeGetCurrent() < quietUntil) return;
+    CGRect builtIn = CGRectNull;
+    uint32_t displayCount = 0;
+    CGDirectDisplayID displays[8];
+    if (CGGetActiveDisplayList(8, displays, &displayCount) != kCGErrorSuccess || displayCount < 1) return;
+    for (uint32_t i = 0; i < displayCount; i++) {
+        CGRect bounds = CGDisplayBounds(displays[i]);
+        if (fabs(bounds.origin.x) < 1 && fabs(bounds.origin.y) < 1) builtIn = bounds;
+    }
+    if (CGRectIsNull(builtIn)) return;
+
+    CFArrayRef info = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+    CGFloat windowY = CGFLOAT_MAX;
+    for (NSDictionary *window in (__bridge NSArray *)info) {
+        if ([window[(id)kCGWindowLayer] integerValue] != 0) continue;
+        NSString *owner = window[(id)kCGWindowOwnerName];
+        if ([owner isEqualToString:@"omacosy-bar"] || [owner isEqualToString:@"omacosy-borders"] ||
+            [owner isEqualToString:@"Dock"] || [owner isEqualToString:@"Window Server"]) continue;
+        CGRect rect = CGRectZero;
+        CGRectMakeWithDictionaryRepresentation((CFDictionaryRef)window[(id)kCGWindowBounds], &rect);
+        if (rect.size.width < 400 || rect.size.height < 400) continue;
+        if (rect.size.height > builtIn.size.height - 4) continue;
+        if (!CGRectContainsPoint(builtIn, CGPointMake(CGRectGetMidX(rect), CGRectGetMidY(rect)))) continue;
+        if (rect.origin.y < windowY) windowY = rect.origin.y;
+    }
+    if (info) CFRelease(info);
+    if (windowY > 400) return;
+    if (fabs(windowY - 41) <= 2) return;
+
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".config/aerospace/aerospace.toml"];
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (!text) return;
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"monitor\\.main = (\\d+)" options:0 error:nil];
+    NSTextCheckingResult *hit = [re firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
+    if (!hit || hit.numberOfRanges < 2) return;
+    int gap = [[text substringWithRange:[hit rangeAtIndex:1]] intValue];
+    int next = gap - (int)llround(windowY - 41);
+    if (next < 0) next = 0;
+    if (next > 120) next = 120;
+    if (next == gap) return;
+    NSString *updated = [re stringByReplacingMatchesInString:text options:0 range:NSMakeRange(0, text.length)
+                                                 withTemplate:[NSString stringWithFormat:@"monitor.main = %d", next]];
+    if (![updated writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]) return;
+    NSTask *reload = [NSTask new];
+    reload.executableURL = [NSURL fileURLWithPath:@"/opt/homebrew/bin/aerospace"];
+    reload.arguments = @[@"reload-config"];
+    [reload launchAndReturnError:nil];
+    quietUntil = CFAbsoluteTimeGetCurrent() + 1.5;
+    logLine([NSString stringWithFormat:@"main top gap %d -> %d (window y %.0f)", gap, next, windowY]);
+}
+
 static void apply(void) {
     if (exposeHeld()) {
         CFArrayRef info = CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID);
@@ -136,12 +194,14 @@ int main(int argc, char **argv) {
         checkOnly = argc > 1 && strcmp(argv[1], "--check") == 0;
         cid = SLSMainConnectionID();
         applied = [NSMutableDictionary dictionary];
+        [NSApplication sharedApplication];
         if (checkOnly) {
             apply();
             return 0;
         }
         logLine(@"watch start");
         [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(__unused NSTimer *t) {
+            syncMainTopGap();
             apply();
         }];
         [[NSRunLoop currentRunLoop] run];
