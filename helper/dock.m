@@ -7,17 +7,20 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <QuartzCore/QuartzCore.h>
 #include <dlfcn.h>
+#include <signal.h>
 
 typedef int SLSConnectionID;
 extern SLSConnectionID SLSMainConnectionID(void);
 extern CGError SLSSetWindowAlpha(SLSConnectionID cid, uint32_t wid, float alpha);
 
 // The real Dock menu is painted by DockHelper and cannot be moved or
-// faded from this process. Hold a still of the screen above it until the
-// copy is done, then drop the still and show our own menu.
+// faded from this process. Hold a still of the screen above it. The still
+// leaves DockHelper out, and it stays up until that window is gone —
+// dropping it on AXCancel shows the menu for a frame.
 static NSWindow *menuCover;
 static NSScreen *menuCoverScreen;
 static CGFloat menuCoverX;
+static const NSInteger kMenuCoverLevel = 900;
 
 static CGFloat primaryScreenHeight(void) {
     for (NSScreen *screen in NSScreen.screens) {
@@ -33,26 +36,70 @@ static void hideMenuCover(void) {
     menuCover = nil;
 }
 
+static BOOL systemMenuWindowOnScreen(void) {
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+    if (!list) return NO;
+    BOOL found = NO;
+    for (NSDictionary *window in (__bridge NSArray *)list) {
+        NSString *owner = window[(id)kCGWindowOwnerName] ?: @"";
+        int layer = [window[(id)kCGWindowLayer] intValue];
+        if ([owner isEqualToString:@"DockHelper"] || ([owner isEqualToString:@"Dock"] && layer >= 20)) {
+            found = YES;
+            break;
+        }
+    }
+    CFRelease(list);
+    return found;
+}
+
+static void settleMenuCover(void) {
+    if (!menuCover) return;
+    for (int i = 0; i < 40; i++) {
+        if (!systemMenuWindowOnScreen()) break;
+        usleep(10 * 1000);
+    }
+    // The window list drops the menu a frame before it finishes drawing.
+    usleep(40 * 1000);
+    hideMenuCover();
+}
+
+static CGImageRef captureCleanStill(NSScreen *screen) {
+    NSRect cocoa = screen.frame;
+    CGRect cg = CGRectMake(cocoa.origin.x, primaryScreenHeight() - NSMaxY(cocoa), cocoa.size.width, cocoa.size.height);
+    CFArrayRef info = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+    if (!info) return NULL;
+    pid_t me = getpid();
+    NSMutableArray<NSNumber *> *ids = [NSMutableArray array];
+    for (NSDictionary *window in (__bridge NSArray *)info) {
+        NSString *owner = window[(id)kCGWindowOwnerName] ?: @"";
+        int layer = [window[(id)kCGWindowLayer] intValue];
+        pid_t pid = [window[(id)kCGWindowOwnerPID] intValue];
+        if ([owner isEqualToString:@"DockHelper"]) continue;
+        if ([owner isEqualToString:@"Dock"] && layer >= 20) continue;
+        // Skip our own popup. The hit strip (1001) and capsule stay in the still.
+        if (pid == me && layer >= 100 && layer < 1001) continue;
+        uint32_t wid = [window[(id)kCGWindowNumber] unsignedIntValue];
+        if (wid) [ids addObject:@(wid)];
+    }
+    CFRelease(info);
+    if (!ids.count) return NULL;
+    typedef CGImageRef (*CaptureArrayFn)(CGRect, CFArrayRef, CGWindowImageOption);
+    static CaptureArrayFn captureArray;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        captureArray = (CaptureArrayFn)dlsym(RTLD_DEFAULT, "CGWindowListCreateImageFromArray");
+    });
+    if (!captureArray) return NULL;
+    return captureArray(cg, (__bridge CFArrayRef)ids, kCGWindowImageBoundsIgnoreFraming);
+}
+
 static void showMenuCover(void) {
     hideMenuCover();
     NSScreen *screen = menuCoverScreen ?: NSScreen.mainScreen;
     if (!screen) return;
-    NSRect frame = screen.frame;
-    CGFloat width = MIN(640.0, frame.size.width);
-    CGFloat x = menuCoverX - width / 2.0;
-    if (x < frame.origin.x) x = frame.origin.x;
-    if (x + width > NSMaxX(frame)) x = NSMaxX(frame) - width;
-    NSRect cocoa = NSMakeRect(x, frame.origin.y, width, frame.size.height);
-    CGRect cg = CGRectMake(cocoa.origin.x, primaryScreenHeight() - NSMaxY(cocoa), cocoa.size.width, cocoa.size.height);
-    typedef CGImageRef (*CaptureFn)(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption);
-    static CaptureFn capture;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        capture = (CaptureFn)dlsym(RTLD_DEFAULT, "CGWindowListCreateImage");
-    });
-    if (!capture) return;
-    CGImageRef image = capture(cg, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, kCGWindowImageDefault);
+    CGImageRef image = captureCleanStill(screen);
     if (!image) return;
+    NSRect cocoa = screen.frame;
     NSWindow *window = [[NSWindow alloc] initWithContentRect:cocoa
                                                    styleMask:NSWindowStyleMaskBorderless
                                                      backing:NSBackingStoreBuffered
@@ -60,25 +107,31 @@ static void showMenuCover(void) {
     window.opaque = YES;
     window.hasShadow = NO;
     window.ignoresMouseEvents = YES;
-    window.backgroundColor = NSColor.blackColor;
     window.animationBehavior = NSWindowAnimationBehaviorNone;
-    // Above the DockHelper menu (101), below the hit strip (1001) and capsule.
-    window.level = NSPopUpMenuWindowLevel + 1;
+    // Above DockHelper's menu, below the hit strip (1001) and capsule.
+    window.level = kMenuCoverLevel;
     window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces
         | NSWindowCollectionBehaviorStationary
-        | NSWindowCollectionBehaviorFullScreenAuxiliary;
+        | NSWindowCollectionBehaviorFullScreenAuxiliary
+        | NSWindowCollectionBehaviorIgnoresCycle;
     NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, cocoa.size.width, cocoa.size.height)];
     view.wantsLayer = YES;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     view.layer.contents = (__bridge id)image;
     CGFloat scale = CGImageGetWidth(image) / MAX(cocoa.size.width, 1);
-    view.layer.contentsScale = scale > 0 ? scale : 1;
+    view.layer.contentsScale = scale > 0 ? scale : screen.backingScaleFactor;
     view.layer.contentsGravity = kCAGravityResize;
     view.layer.magnificationFilter = kCAFilterNearest;
     view.layer.minificationFilter = kCAFilterNearest;
+    [CATransaction commit];
     CGImageRelease(image);
     window.contentView = view;
     [window setFrame:cocoa display:YES];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     [window orderFrontRegardless];
+    [CATransaction commit];
     [CATransaction flush];
     menuCover = window;
 }
@@ -561,6 +614,8 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
         AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
     }
     fprintf(stderr, "omacosy-dock: accessibility %d\n", AXIsProcessTrusted());
+    setExposeHold(NO);
+    signalBorders(SIGCONT);
     NSNotificationCenter *nc = NSWorkspace.sharedWorkspace.notificationCenter;
     for (NSNotificationName name in @[NSWorkspaceDidLaunchApplicationNotification,
                                       NSWorkspaceDidTerminateApplicationNotification,
@@ -685,6 +740,7 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
 }
 
 - (NSMutableArray *)persistentApps {
+    CFPreferencesAppSynchronize(CFSTR("com.apple.dock"));
     CFArrayRef raw = CFPreferencesCopyAppValue(CFSTR("persistent-apps"), CFSTR("com.apple.dock"));
     NSMutableArray *apps = raw ? [(__bridge NSArray *)raw mutableCopy] : [NSMutableArray array];
     if (raw) CFRelease(raw);
@@ -830,6 +886,126 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
         if (NSPointInRect(p, NSInsetRect(strip.frame, 0, -4))) return YES;
     }
     return NO;
+}
+
+static int exposeWatchToken;
+
+static void setExposeHold(BOOL on) {
+    NSString *body = on ? @"1\n" : @"0\n";
+    [body writeToFile:@"/tmp/omacosy-expose" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
+static void signalBorders(int sig) {
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/pgrep"];
+    task.arguments = @[@"-x", @"omacosy-borders"];
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    if (![task launchAndReturnError:nil]) return;
+    [task waitUntilExit];
+    NSString *out = [[NSString alloc] initWithData:[pipe.fileHandleForReading readDataToEndOfFile] encoding:NSUTF8StringEncoding];
+    for (NSString *line in [out componentsSeparatedByString:@"\n"]) {
+        pid_t pid = (pid_t)line.intValue;
+        if (pid > 1) kill(pid, sig);
+    }
+}
+
+static void fadeOwner(NSString *owner, float alpha) {
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID);
+    if (!list) return;
+    SLSConnectionID cid = SLSMainConnectionID();
+    for (NSDictionary *window in (__bridge NSArray *)list) {
+        if (![window[(id)kCGWindowOwnerName] isEqualToString:owner]) continue;
+        uint32_t wid = [window[(id)kCGWindowNumber] unsignedIntValue];
+        if (wid) SLSSetWindowAlpha(cid, wid, alpha);
+    }
+    CFRelease(list);
+}
+
+static BOOL exposeSurfaceUp(void) {
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+    if (!list) return NO;
+    BOOL found = NO;
+    for (NSDictionary *window in (__bridge NSArray *)list) {
+        NSString *owner = window[(id)kCGWindowOwnerName] ?: @"";
+        if (![owner isEqualToString:@"Dock"] && ![owner isEqualToString:@"WindowManager"]) continue;
+        NSDictionary *bounds = window[(id)kCGWindowBounds];
+        double width = [bounds[@"Width"] doubleValue];
+        double height = [bounds[@"Height"] doubleValue];
+        if (width < 160 || height < 160) continue;
+        int layer = [window[(id)kCGWindowLayer] intValue];
+        // The wallpaper is a huge negative layer. The spread sits above it.
+        if ([owner isEqualToString:@"WindowManager"] && layer < 0) continue;
+        found = YES;
+        break;
+    }
+    CFRelease(list);
+    return found;
+}
+
+static id exposeMouseMonitor;
+static id exposeKeyMonitor;
+
+- (void)finishExpose {
+    exposeWatchToken++;
+    if (exposeMouseMonitor) {
+        [NSEvent removeMonitor:exposeMouseMonitor];
+        exposeMouseMonitor = nil;
+    }
+    if (exposeKeyMonitor) {
+        [NSEvent removeMonitor:exposeKeyMonitor];
+        exposeKeyMonitor = nil;
+    }
+    setExposeHold(NO);
+    signalBorders(SIGCONT);
+    fadeOwner(@"omacosy-bar", 1);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        fadeOwner(@"omacosy-borders", 1);
+    });
+}
+
+- (void)armExposeDismiss {
+    NSDate *start = [NSDate date];
+    void (^ended)(NSEvent *) = ^(NSEvent *event) {
+        if (-[start timeIntervalSinceNow] < 0.8) return;
+        if (event.type == NSEventTypeKeyDown && event.keyCode != 53 && event.keyCode != 36) return;
+        [self finishExpose];
+    };
+    exposeMouseMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp handler:ended];
+    exposeKeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:ended];
+}
+
+- (void)watchExpose:(int)token seen:(BOOL)seen misses:(int)misses tries:(int)tries {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (token != exposeWatchToken) return;
+        fadeOwner(@"omacosy-bar", 0);
+        fadeOwner(@"omacosy-borders", 0);
+        BOOL up = exposeSurfaceUp();
+        BOOL nextSeen = seen || up;
+        int nextMiss = up ? 0 : misses + 1;
+        // Only the disappearance of a spread we actually saw may restore
+        // early. Never seeing one used to put the bar and the ring back
+        // while the windows were still fanned out.
+        if ((nextSeen && nextMiss >= 3) || tries > 500) {
+            [self finishExpose];
+            return;
+        }
+        [self watchExpose:token seen:nextSeen misses:nextMiss tries:tries + 1];
+    });
+}
+
+- (void)yieldToExpose {
+    _shown = NO;
+    _generation++;
+    _leaveToken++;
+    [_dock orderOut:nil];
+    setExposeHold(YES);
+    signalBorders(SIGSTOP);
+    fadeOwner(@"omacosy-bar", 0);
+    fadeOwner(@"omacosy-borders", 0);
+    int token = ++exposeWatchToken;
+    [self armExposeDismiss];
+    [self watchExpose:token seen:NO misses:0 tries:0];
 }
 
 - (void)hide {
@@ -1241,7 +1417,7 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
             [self closeSystemMenu:NULL];
         }
     }
-    hideMenuCover();
+    settleMenuCover();
     CFRelease(item);
     return built;
 }
@@ -1501,9 +1677,43 @@ end tell\n", path, path, name, indexPath];
     }
 }
 
+- (BOOL)pinMenuTitle:(NSString *)title {
+    if (!title.length) return NO;
+    if ([title isEqualToString:@"Keep in Dock"] || [title isEqualToString:@"Remove from Dock"]) return YES;
+    return [title containsString:@"程序坞"] && ([title containsString:@"保留"] || [title containsString:@"移除"]);
+}
+
+- (BOOL)exposeMenuTitle:(NSString *)title {
+    if (!title.length) return NO;
+    NSString *folded = title.lowercaseString;
+    if ([folded isEqualToString:@"show all windows"]) return YES;
+    return [title containsString:@"所有窗口"];
+}
+
+- (BOOL)loginMenuTitle:(NSString *)title {
+    if (!title.length) return NO;
+    if ([title isEqualToString:@"Open at Login"]) return YES;
+    return [title containsString:@"登录时打开"];
+}
+
 - (void)menuPerformSystem:(NSMenuItem *)item {
     SystemMenuPick *pick = item.representedObject;
     if (![pick isKindOfClass:SystemMenuPick.class]) return;
+    // The system item is a checkmark. Replaying it and then cancelling the
+    // real menu puts the pin back, so the icon never moves. Change our list.
+    if ([self pinMenuTitle:item.title]) {
+        DockTile *tile = [DockTile new];
+        tile.name = pick.itemTitle;
+        tile.url = pick.itemPath.length ? [NSURL fileURLWithPath:pick.itemPath] : nil;
+        tile.bundleID = [self bundleIDForURL:tile.url];
+        [self menuTogglePinForTile:tile];
+        return;
+    }
+    if ([self loginMenuTitle:item.title]) {
+        NSURL *url = pick.itemPath.length ? [NSURL fileURLWithPath:pick.itemPath] : nil;
+        if (url) setLoginItem(url, !loginItemEnabled(url));
+        return;
+    }
     if (!AXIsProcessTrusted()) return;
     DockTile *tile = [DockTile new];
     tile.name = pick.itemTitle;
@@ -1512,14 +1722,14 @@ end tell\n", path, path, name, indexPath];
     if (!dockItem) return;
     showMenuCover();
     if (AXUIElementPerformAction(dockItem, CFSTR("AXShowMenu")) != kAXErrorSuccess) {
-        hideMenuCover();
+        settleMenuCover();
         CFRelease(dockItem);
         return;
     }
     AXUIElementRef menu = [self populatedMenuOfDockItem:dockItem];
     if (!menu) {
         [self closeSystemMenu:NULL];
-        hideMenuCover();
+        settleMenuCover();
         CFRelease(dockItem);
         return;
     }
@@ -1546,17 +1756,31 @@ end tell\n", path, path, name, indexPath];
         at = next;
         if (index != pick.indexes.lastObject) {
             AXUIElementRef sub = [self menuChildOf:at];
+            [self parkMenuOffscreen:sub];
             if (at && at != menu) CFRelease(at);
             at = sub;
         }
     }
+    [self parkMenuOffscreen:menu];
     if (at) AXUIElementPerformAction(at, kAXPressAction);
+    // This item opens App Exposé. Escape and the frozen cover both land
+    // on top of that animation, and the capsule would sit over the windows.
+    if ([self exposeMenuTitle:item.title]) {
+        if (at && at != menu) CFRelease(at);
+        if (menu) CFRelease(menu);
+        CFRelease(dockItem);
+        [self yieldToExpose];
+        hideMenuCover();
+        [item.menu cancelTracking];
+        return;
+    }
+    [self parkMenuOffscreen:menu];
     if (at && at != menu) CFRelease(at);
     if (menu) {
         [self closeSystemMenu:menu];
         CFRelease(menu);
     }
-    hideMenuCover();
+    settleMenuCover();
     CFRelease(dockItem);
 }
 
@@ -1684,7 +1908,11 @@ end tell\n", path, path, name, indexPath];
 }
 
 - (void)menuTogglePin:(NSMenuItem *)item {
-    DockTile *tile = item.representedObject;
+    [self menuTogglePinForTile:item.representedObject];
+}
+
+- (void)menuTogglePinForTile:(DockTile *)tile {
+    if (!tile.url) return;
     NSMutableArray *apps = [self persistentApps];
     NSInteger found = NSNotFound;
     for (NSInteger i = 0; i < (NSInteger)apps.count; i++) {

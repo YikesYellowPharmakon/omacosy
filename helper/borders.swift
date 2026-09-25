@@ -554,7 +554,18 @@ func recheck(after delay: Double) {
     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { tick() }
 }
 
+func exposeHeld() -> Bool {
+    (try? String(contentsOfFile: "/tmp/omacosy-expose", encoding: .utf8))?.contains("1") == true
+}
+
 func tick() {
+    // App Exposé moves every window at once. Following that drops the
+    // ring onto a thumbnail, so the dock asks us to sit out until it ends.
+    if exposeHeld() {
+        hideRing("expose")
+        syncShroud(nil)
+        return
+    }
     // Under OmniWM the ring is parked entirely: OmniWM draws its own
     // border (themed by theme-set writing [borders.color] into its
     // settings), and the WM's border hugs screen edges where our

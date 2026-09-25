@@ -1,7 +1,10 @@
 #!/bin/zsh
 # One argv for Herdr. The launcher splits arguments on spaces, so the
 # Neovim command line has to live in this script.
+# -n: every window opens this same demo. A swap file makes the next
+# window stop and ask whether to recover it.
 export TERM=xterm-ghostty
 exec /opt/homebrew/bin/nvim \
+  -n \
   -c "luafile $HOME/.local/share/omacosy/share/skin-demo.lua" \
   "$HOME/.local/share/omacosy/share/skin-demo.py"

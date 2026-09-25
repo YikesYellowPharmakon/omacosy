@@ -55,21 +55,19 @@ exec-on-workspace-change = ['/bin/bash', '-c',
   'touch /tmp/omacosy-ws-switch; echo "$AEROSPACE_FOCUSED_WORKSPACE" > /tmp/omacosy-bar-ws; $HOME/.local/bin/omacosy-focus-guard; $HOME/.local/bin/omacosy-ws-land; $HOME/.local/bin/omacosy-arrange; $HOME/.local/bin/omacosy-tray --ensure-watch'
 ]
 
-[gaps]
-inner.horizontal = 8
-inner.vertical = 8
+gaps.inner.horizontal = 8
+gaps.inner.vertical = 8
 # 2 = ring width; 0 clips the border at the screen edge.
-outer.left = 2
-outer.bottom = 2
-outer.right = 2
-# The built-in display keeps a 30pt menu-bar reservation with the menu
-# bar hidden, and AeroSpace adds outer.top below that reservation.
-# The bar occupies 0..34, so 11 lands a window at y=41: a few points
-# under the bar, the gap this screen was tuned to. Treating the number
-# as a distance from the physical top (38) stacks it on the 30pt and
-# opens a wide band. The external display has no reservation, so 46
-# is from its physical top and clears the same bar.
-outer.top = [{ monitor.secondary = 46 }, 11]
+gaps.outer.left = 2
+gaps.outer.bottom = 2
+gaps.outer.right = 2
+# outer.top is the distance from the physical top of the screen.
+# The bar occupies 0..34. 41 puts the window a few points under it,
+# which is where 11 used to land when AeroSpace added it below the
+# 30pt menu-bar reservation. A value inside that reservation (11)
+# is clamped to y=30 and the window sits on the bar. The external
+# display has no reservation; 46 clears the same bar from its top.
+gaps.outer.top = [{ monitor.secondary = 46 }, 41]
 
 # Fixed-size settings windows fight the tiler (resize -> snap back ->
 # relayout flicker); float them instead.

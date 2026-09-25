@@ -1,79 +1,139 @@
 #!/bin/zsh
-# Ghostty runs this instead of a bare shell. Herdr is the window;
-# the first launch of a single-pane session opens Neovim beside it.
+# Ghostty runs this instead of a bare shell.
+#
+# A plain `herdr` attaches every terminal to one persistent session, so
+# a new Ghostty window is another view of the window already open.
+# Each window gets its own session, and that session stops when the
+# window's client exits.
+#
+# Stock Ghostty starts in $HOME. Pane borders and the left sidebar
+# follow the foreground program in every pane, including later splits.
 HERDR=/opt/homebrew/bin/herdr
-ROOT="$HOME/.local/share/omacosy"
-LOCK="/tmp/omacosy-studio-layout-$(id -u).lock.d"
+SESSION="ghostty-$$"
 LOG="/tmp/omacosy-studio.log"
 
-pane_id() {
-  /usr/bin/python3 -c '
-import json, sys
-raw = sys.stdin.read()
-start = raw.find("{")
-if start < 0:
-    sys.exit(1)
-data = json.loads(raw[start:])
-node = data.get("result", data)
-if isinstance(node, dict) and "panes" in node:
-    panes = node["panes"]
-elif isinstance(node, dict) and "pane" in node:
-    panes = [node["pane"]]
-else:
-    panes = node if isinstance(node, list) else []
-if not panes:
-    sys.exit(1)
-pane = panes[0]
-print(pane.get("pane_id") or pane.get("id") or "")
-'
+stop_session() {
+  trap - EXIT HUP TERM INT
+  "$HERDR" session stop "$SESSION" >/dev/null 2>&1 || true
+  "$HERDR" session delete "$SESSION" >/dev/null 2>&1 || true
 }
 
-layout() {
-  mkdir "$LOCK" 2>/dev/null || return 0
-  trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
-  {
-    local i json first second
-    json=""
-    for i in {1..40}; do
-      json=$("$HERDR" pane list 2>/dev/null) || true
-      if [[ "$json" == *pane_id* ]]; then
-        break
-      fi
-      sleep 0.25
-    done
-    sleep 0.5
-    json=$("$HERDR" pane list 2>/dev/null) || exit 0
-    # A restored session already has other workspaces. Lay out only the
-    # focused workspace, and only when that workspace is still one shell.
-    first=$(print -r -- "$json" | /usr/bin/python3 -c '
-import json, sys
-raw = sys.stdin.read()
-start = raw.find("{")
-if start < 0:
-    sys.exit(1)
-panes = json.loads(raw[start:])["result"]["panes"]
-focused = next((p for p in panes if p.get("focused")), None)
-if not focused:
-    sys.exit(1)
-ws = focused["workspace_id"]
-mates = [p for p in panes if p.get("workspace_id") == ws]
-if len(mates) != 1:
-    sys.exit(1)
-print(focused["pane_id"])
-') || exit 0
-    [[ -n "$first" ]] || exit 0
-    second=$("$HERDR" pane split "$first" --direction right --ratio 0.54 --no-focus | pane_id) || exit 0
-    [[ -n "$second" ]] || exit 0
-    "$HERDR" pane run "$second" "$ROOT/bin/omacosy-nvim-demo"
-    "$HERDR" pane rename "$first" shell
-    "$HERDR" pane rename "$second" nvim
-    "$HERDR" pane report-agent --source omacosy --agent shell --state idle "$first"
-    "$HERDR" pane report-agent --source omacosy --agent nvim --state working "$second"
-  } >>"$LOG" 2>&1
+label_panes() {
+  /usr/bin/python3 - "$HERDR" "$SESSION" >>"$LOG" 2>&1 <<'PY'
+import json, os, re, subprocess, sys, time
+
+herdr, session = sys.argv[1], sys.argv[2]
+SHELLS = {"zsh", "bash", "fish", "sh", "dash", "ksh", "nu"}
+seen = {}
+misses = 0
+
+def call(*args):
+    run = subprocess.run(
+        [herdr, "--session", session, *args],
+        capture_output=True,
+        text=True,
+    )
+    if run.returncode != 0:
+        return None
+    raw = run.stdout
+    start = raw.find("{")
+    if start < 0:
+        return None
+    try:
+        return json.loads(raw[start:])
+    except json.JSONDecodeError:
+        return None
+
+def sanitize(name):
+    text = re.sub(r"[^a-z0-9_-]", "-", (name or "").lower())
+    text = re.sub(r"-+", "-", text).strip("-")
+    if not text or not text[0].isalpha():
+        text = "cmd"
+    return text[:31]
+
+def program(info):
+    node = (info or {}).get("result", {}).get("process_info") or {}
+    procs = node.get("foreground_processes") or []
+    leader = node.get("foreground_process_group_id")
+    shell_pid = node.get("shell_pid")
+    chosen = next((p for p in procs if p.get("pid") == leader), None)
+    if chosen is None and procs:
+        chosen = procs[0]
+    if not chosen:
+        return "zsh", "idle"
+    argv0 = chosen.get("argv0") or chosen.get("name") or ""
+    base = os.path.basename(argv0) or chosen.get("name") or "zsh"
+    if base.startswith("-"):
+        base = base[1:]
+    cmd = chosen.get("cmdline") or ""
+    name = chosen.get("name") or ""
+    if chosen.get("pid") == shell_pid or base in SHELLS:
+        return sanitize(base or "zsh"), "idle"
+    if name == "Python" or "Python.app" in cmd or "Python.framework" in cmd:
+        return "python3", "working"
+    return sanitize(base), "working"
+
+while True:
+    data = call("pane", "list")
+    if not data:
+        misses += 1
+        if misses > (8 if seen else 80):
+            break
+        time.sleep(0.4)
+        continue
+    misses = 0
+    panes = data.get("result", {}).get("panes") or []
+    alive = set()
+    for pane in panes:
+        pane_id = pane.get("pane_id")
+        if not pane_id:
+            continue
+        alive.add(pane_id)
+        info = call("pane", "process-info", "--pane", pane_id)
+        if not info:
+            continue
+        label, state = program(info)
+        if seen.get(pane_id) == (label, state):
+            continue
+        subprocess.run(
+            [herdr, "--session", session, "pane", "rename", pane_id, label],
+            capture_output=True,
+            text=True,
+        )
+        reported = subprocess.run(
+            [
+                herdr, "--session", session, "pane", "report-agent",
+                "--source", "omacosy", "--agent", label, "--state", state,
+                pane_id,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if reported.returncode == 0:
+            seen[pane_id] = (label, state)
+    for pane_id in list(seen):
+        if pane_id not in alive:
+            del seen[pane_id]
+    time.sleep(0.4)
+PY
 }
 
-cd "$ROOT" 2>/dev/null || cd "$HOME" || exit 1
+cd "$HOME" || exit 1
 setopt NO_HUP
-layout &
+# Start the watcher before the exit trap. A background job copies a
+# trap that is already installed, and that trap would stop this
+# window's session as soon as the watcher returned.
+label_panes &
 disown
-exec "$HERDR"
+# Run the trap while Herdr is still in the foreground. Without this,
+# closing the window queues the trap until the client exits, and the
+# client is what the trap is supposed to shut down.
+setopt TRAPS_ASYNC
+trap 'stop_session; exit 129' HUP
+trap 'stop_session; exit 130' INT
+trap 'stop_session; exit 143' TERM
+trap stop_session EXIT
+"$HERDR" --session "$SESSION"
+rc=$?
+stop_session
+exit "$rc"

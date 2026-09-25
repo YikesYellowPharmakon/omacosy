@@ -75,7 +75,24 @@ static uint32_t displayContaining(CGRect rect, uint32_t *ids, uint32_t count) {
     return 0;
 }
 
+static BOOL exposeHeld(void) {
+    NSString *text = [NSString stringWithContentsOfFile:@"/tmp/omacosy-expose" encoding:NSUTF8StringEncoding error:nil];
+    return [text containsString:@"1"];
+}
+
 static void apply(void) {
+    if (exposeHeld()) {
+        CFArrayRef info = CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID);
+        for (NSDictionary *window in (__bridge NSArray *)info) {
+            if (![window[(id)kCGWindowOwnerName] isEqualToString:@"omacosy-bar"]) continue;
+            uint32_t wid = [window[(id)kCGWindowNumber] unsignedIntValue];
+            if (!wid) continue;
+            SLSSetWindowAlpha(cid, wid, 0);
+            applied[@(wid)] = @0;
+        }
+        if (info) CFRelease(info);
+        return;
+    }
     NSSet<NSNumber *> *covered = browserFullscreenDisplays();
     uint32_t ids[8] = {0};
     uint32_t count = 0;
