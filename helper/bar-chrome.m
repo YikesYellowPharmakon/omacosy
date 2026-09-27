@@ -186,12 +186,7 @@ static void syncMainTopGap(void) {
     // A few points of jitter is a stationary window. Rewriting the gap
     // for that is what moves it on its own.
     if (fabs(windowY - 41) <= 8) return;
-    if (epochShots >= 1) return;
-    if (!widIsTiled(measuredWid)) {
-        stableY = -1;
-        quietUntil = CFAbsoluteTimeGetCurrent() + 0.8;
-        return;
-    }
+    if (!widIsTiled(measuredWid)) return;
 
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".config/aerospace/aerospace.toml"];
     NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -200,23 +195,28 @@ static void syncMainTopGap(void) {
     NSTextCheckingResult *hit = [re firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
     if (!hit || hit.numberOfRanges < 2) return;
     int gap = [[text substringWithRange:[hit rangeAtIndex:1]] intValue];
-    // y=30 is the menu-bar clamp: the gap is inside that band. One jump
-    // to 41. Any other settled top is a single subtraction, not a walk.
-    int next = fabs(windowY - 30) <= 1 ? 41 : gap - (int)llround(windowY - 41);
-    if (next < 0) next = 0;
-    if (next > 46) next = 46;
-    if (next == gap) return;
-    NSString *updated = [re stringByReplacingMatchesInString:text options:0 range:NSMakeRange(0, text.length)
-                                                 withTemplate:[NSString stringWithFormat:@"monitor.main = %d", next]];
-    if (![updated writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]) return;
+    // 71 means the 30pt reservation is on and the running gap is still 41.
+    // 30 or 11 means that reservation is off and the gap is inside the bar.
+    // Anything nearer than that is left alone, so a still window does not move.
+    int next = -1;
+    if (fabs(windowY - 71) <= 8) next = 11;
+    else if (fabs(windowY - 30) <= 2 || fabs(windowY - 11) <= 2) next = 41;
+    else return;
+    static CGFloat latchedY = -1;
+    if (latchedY >= 0 && fabs(windowY - latchedY) < 15) return;
+    if (next != gap) {
+        NSString *updated = [re stringByReplacingMatchesInString:text options:0 range:NSMakeRange(0, text.length)
+                                                     withTemplate:[NSString stringWithFormat:@"monitor.main = %d", next]];
+        if (![updated writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]) return;
+    }
     NSTask *reload = [NSTask new];
     reload.executableURL = [NSURL fileURLWithPath:@"/opt/homebrew/bin/aerospace"];
     reload.arguments = @[@"reload-config"];
     [reload launchAndReturnError:nil];
-    epochShots++;
-    quietUntil = CFAbsoluteTimeGetCurrent() + 2.0;
+    latchedY = windowY;
+    quietUntil = CFAbsoluteTimeGetCurrent() + 30.0;
     stableY = -1;
-    logLine([NSString stringWithFormat:@"main top gap %d -> %d (window y %.0f, shot %d)", gap, next, windowY, epochShots]);
+    logLine([NSString stringWithFormat:@"main top reload %d -> %d (window y %.0f)", gap, next, windowY]);
 }
 
 static void apply(void) {
@@ -292,6 +292,9 @@ int main(int argc, char **argv) {
             scheduleGapRetune();
         }];
         scheduleGapRetune();
+        [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(__unused NSTimer *t) {
+            syncMainTopGap();
+        }];
         [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(__unused NSTimer *t) {
             apply();
         }];

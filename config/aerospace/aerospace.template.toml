@@ -62,11 +62,10 @@ gaps.outer.left = 2
 gaps.outer.bottom = 2
 gaps.outer.right = 2
 # The bar occupies 0..34. A tiled window on the built-in display
-# should start at y=41. AeroSpace adds a 30pt menu-bar reservation
-# in some layouts and not others, so monitor.main is 41 or 11.
-# bar-chrome writes it once after a display change or wake, and only
-# when a tiled window is well clear of y=41. It does not follow a
-# window that is sitting still. The external display stays at 46.
+# should start at y=41. monitor.main is 11 when AeroSpace adds the
+# 30pt menu-bar reservation, and 41 when it does not. bar-chrome
+# reloads only when a tiled window is sitting near y=71 or y=30.
+# A window already near 41 is left alone. The external display stays at 46.
 gaps.outer.top = [{ monitor.main = 41 }, { monitor.secondary = 46 }, 41]
 
 # Fixed-size settings windows fight the tiler (resize -> snap back ->
