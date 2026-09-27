@@ -81,6 +81,29 @@ static BOOL exposeHeld(void) {
     return [text containsString:@"1"];
 }
 
+// The gap is not watched while windows sit still. A retune runs once,
+// two seconds after launch, wake, or a display change, and only when a
+// tiled window is more than 8 points away from y=41.
+static int epochShots = 0;
+static int epochDisplays = -1;
+static CFAbsoluteTime quietUntil = 0;
+
+static void syncMainTopGap(void);
+static BOOL gapRetuneOnce = NO;
+static int retuneToken = 0;
+
+static void scheduleGapRetune(void) {
+    int token = ++retuneToken;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (token != retuneToken) return;
+        epochShots = 0;
+        quietUntil = 0;
+        gapRetuneOnce = YES;
+        syncMainTopGap();
+        gapRetuneOnce = NO;
+    });
+}
+
 // Floating windows sit wherever they were dropped. Option-T toggles
 // them back to tiling, and their in-between tops must not move the gap
 // or the tiled layout walks down to y=41 in several reloads.
@@ -104,17 +127,12 @@ static BOOL widIsTiled(uint32_t wid) {
     return NO;
 }
 
-// Built-in window top must stay at y=41, just under the 34pt bar.
-// AeroSpace sometimes adds the menu-bar reservation and sometimes does
-// not, so a fixed monitor.main is wrong in one of the two layouts.
-// Only a settled tiled window counts. A fullscreen page (Chrome sits
-// near y=122) and the frames while it animates back must not move the
-// gap, or reload-config walks the window down in visible steps.
+// Built-in tiled windows must start at y=41, just under the 34pt bar.
+// AeroSpace adds a 30pt menu-bar reservation in some layouts and not
+// others, so monitor.main is either 11 or 41. This picks that once.
 static void syncMainTopGap(void) {
-    static CFAbsoluteTime quietUntil = 0;
     static CFAbsoluteTime stableSince = 0;
     static CGFloat stableY = -1;
-    static CGFloat lastCorrectedY = -1;
     if (CFAbsoluteTimeGetCurrent() < quietUntil) return;
     if (browserFullscreenDisplays().count > 0) {
         stableY = -1;
@@ -129,6 +147,10 @@ static void syncMainTopGap(void) {
         if (fabs(bounds.origin.x) < 1 && fabs(bounds.origin.y) < 1) builtIn = bounds;
     }
     if (CGRectIsNull(builtIn)) return;
+    if ((int)displayCount != epochDisplays) {
+        epochDisplays = (int)displayCount;
+        epochShots = 0;
+    }
 
     CFArrayRef info = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
     CGFloat windowY = CGFLOAT_MAX;
@@ -152,20 +174,19 @@ static void syncMainTopGap(void) {
         }
     }
     if (info) CFRelease(info);
-    if (windowY > 400) {
-        stableY = -1;
-        return;
+    if (windowY > 400) return;
+    if (!gapRetuneOnce) {
+        if (stableY < 0 || fabs(windowY - stableY) > 2) {
+            stableY = windowY;
+            stableSince = CFAbsoluteTimeGetCurrent();
+            return;
+        }
+        if (CFAbsoluteTimeGetCurrent() - stableSince < 1.2) return;
     }
-    if (stableY < 0 || fabs(windowY - stableY) > 2) {
-        stableY = windowY;
-        stableSince = CFAbsoluteTimeGetCurrent();
-        return;
-    }
-    if (CFAbsoluteTimeGetCurrent() - stableSince < 0.6) return;
-    if (fabs(windowY - 41) <= 2) return;
-    // y=30 is the clamp, not a tiled top. Treating it as one flips the
-    // gap between 11 and 41 and the window steps down after each toggle.
-    if (fabs(windowY - 30) <= 1) return;
+    // A few points of jitter is a stationary window. Rewriting the gap
+    // for that is what moves it on its own.
+    if (fabs(windowY - 41) <= 8) return;
+    if (epochShots >= 1) return;
     if (!widIsTiled(measuredWid)) {
         stableY = -1;
         quietUntil = CFAbsoluteTimeGetCurrent() + 0.8;
@@ -179,10 +200,9 @@ static void syncMainTopGap(void) {
     NSTextCheckingResult *hit = [re firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
     if (!hit || hit.numberOfRanges < 2) return;
     int gap = [[text substringWithRange:[hit rangeAtIndex:1]] intValue];
-    // y=30 is AeroSpace's clamp, not a real top. Adding 11 while it stays
-    // there walks the gap to the cap and shoves the window down the screen.
-    if (lastCorrectedY >= 0 && fabs(windowY - lastCorrectedY) <= 2) return;
-    int next = gap - (int)llround(windowY - 41);
+    // y=30 is the menu-bar clamp: the gap is inside that band. One jump
+    // to 41. Any other settled top is a single subtraction, not a walk.
+    int next = fabs(windowY - 30) <= 1 ? 41 : gap - (int)llround(windowY - 41);
     if (next < 0) next = 0;
     if (next > 46) next = 46;
     if (next == gap) return;
@@ -193,10 +213,10 @@ static void syncMainTopGap(void) {
     reload.executableURL = [NSURL fileURLWithPath:@"/opt/homebrew/bin/aerospace"];
     reload.arguments = @[@"reload-config"];
     [reload launchAndReturnError:nil];
-    quietUntil = CFAbsoluteTimeGetCurrent() + 1.5;
+    epochShots++;
+    quietUntil = CFAbsoluteTimeGetCurrent() + 2.0;
     stableY = -1;
-    lastCorrectedY = windowY;
-    logLine([NSString stringWithFormat:@"main top gap %d -> %d (window y %.0f)", gap, next, windowY]);
+    logLine([NSString stringWithFormat:@"main top gap %d -> %d (window y %.0f, shot %d)", gap, next, windowY, epochShots]);
 }
 
 static void apply(void) {
@@ -261,8 +281,18 @@ int main(int argc, char **argv) {
             return 0;
         }
         logLine(@"watch start");
+        [[[NSWorkspace sharedWorkspace] notificationCenter] addObserverForName:NSWorkspaceDidWakeNotification
+                                                                        object:nil queue:nil
+                                                                    usingBlock:^(__unused NSNotification *note) {
+            scheduleGapRetune();
+        }];
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidChangeScreenParametersNotification
+                                                          object:nil queue:nil
+                                                      usingBlock:^(__unused NSNotification *note) {
+            scheduleGapRetune();
+        }];
+        scheduleGapRetune();
         [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(__unused NSTimer *t) {
-            syncMainTopGap();
             apply();
         }];
         [[NSRunLoop currentRunLoop] run];
