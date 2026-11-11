@@ -4,25 +4,42 @@
 # the user stays there. Leave native FS so the switch is visible, and
 # remember the window so omacosy-ws-land can put it back on return.
 set -euo pipefail
-REAL="${AEROSPACE_REAL:-/opt/homebrew/Caskroom/aerospace/0.21.3-Beta/AeroSpace-v0.21.3-Beta/bin/aerospace}"
+
+# The real CLI. Homebrew keeps it in a directory named after the version,
+# and that path was written out here: the first `brew upgrade` of AeroSpace
+# would have left this pointing at nothing. This wrapper is installed AS
+# /opt/homebrew/bin/aerospace, so that name cannot be the fallback either.
+REAL="${AEROSPACE_REAL:-}"
 if [[ ! -x "$REAL" ]]; then
-  REAL=/opt/homebrew/Caskroom/aerospace/0.21.3-Beta/AeroSpace-v0.21.3-Beta/bin/aerospace
+  REAL=""
+  for candidate in /opt/homebrew/Caskroom/aerospace/*/AeroSpace-v*/bin/aerospace \
+    /usr/local/Caskroom/aerospace/*/AeroSpace-v*/bin/aerospace; do
+    if [[ -x "$candidate" ]]; then REAL="$candidate"; fi
+  done
+fi
+if [[ -z "$REAL" ]]; then
+  echo "aerospace-wrap: no AeroSpace CLI under Homebrew's Caskroom" >&2
+  exit 127
 fi
 
-HOLD="${XDG_STATE_HOME:-$HOME/.local/state}/omacosy/fs-hold"
-mkdir -p "$(dirname "$HOLD")"
-touch "$HOLD"
-
-hold_put() {
-  local ws="$1" id="$2"
-  local tmp
-  tmp=$(mktemp)
-  awk -v ws="$ws" '$1 != ws' "$HOLD" >"$tmp" 2>/dev/null || true
-  printf '%s %s\n' "$ws" "$id" >>"$tmp"
-  mv "$tmp" "$HOLD"
-}
-
+# Everything below is for `workspace` alone. Every other subcommand goes
+# straight through: the bar, the dock and the layout scripts make dozens of
+# these calls per focus change, and each used to pay for a mkdir and a
+# touch it had no use for.
 if [[ "${1:-}" == "workspace" ]]; then
+  HOLD="${XDG_STATE_HOME:-$HOME/.local/state}/omacosy/fs-hold"
+  mkdir -p "$(dirname "$HOLD")"
+  touch "$HOLD"
+
+  hold_put() {
+    local ws="$1" id="$2"
+    local tmp
+    tmp=$(mktemp)
+    awk -v ws="$ws" '$1 != ws' "$HOLD" >"$tmp" 2>/dev/null || true
+    printf '%s %s\n' "$ws" "$id" >>"$tmp"
+    mv "$tmp" "$HOLD"
+  }
+
   date +%s > /tmp/omacosy-ws-switch
   exited=0
   while IFS='|' read -r id layout ws; do

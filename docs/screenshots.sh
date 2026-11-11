@@ -167,6 +167,7 @@ for ws in $("$A" list-workspaces --monitor "$BUILTIN_MON"); do
     EMPTY_WS="$EMPTY_WS $ws"
   fi
 done
+# shellcheck disable=SC2086  # unquoted on purpose: the list arrives one per line
 SCRATCH="$(echo $EMPTY_WS | cut -d' ' -f1)"
 [ -n "$SCRATCH" ] || die "no empty workspace on the built-in to stage in"
 aim
@@ -243,6 +244,7 @@ n=0
 for wid in $("$A" list-windows --workspace "$SCRATCH" --format '%{window-id}'); do
   n=$((n + 1))
   [ "$n" -eq 1 ] && continue # one stays behind
+  # shellcheck disable=SC2086  # unquoted on purpose, as above
   target="$(echo $EMPTY_WS | cut -d' ' -f$n)"
   [ -n "$target" ] && "$A" move-node-to-workspace --window-id "$wid" "$target" >/dev/null 2>&1 || true
 done

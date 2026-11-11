@@ -24,6 +24,7 @@ MARK="omacosy-omniwm"                     # rule-description prefix, removal key
 [ -f "$KARABINER" ] || { echo "no karabiner.json" >&2; exit 1; }
 
 TERMINAL=Ghostty BROWSER=Safari MUSIC=Spotify MESSENGER=Slack
+# shellcheck source=/dev/null  # written by install.sh on the target machine
 [ -f "$APPS" ] && . "$APPS" 2>/dev/null
 
 export KARABINER MARK TERMINAL BROWSER MUSIC MESSENGER

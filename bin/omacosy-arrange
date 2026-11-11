@@ -11,17 +11,23 @@ A="$(command -v aerospace || echo /opt/homebrew/bin/aerospace)"
 CMD=run
 [ "${1:-}" = "--new" ] && CMD=new
 
-LOCK="/tmp/omacosy-arrange-$(id -u)"
-if [ -f "$LOCK" ]; then
+# One arrange at a time. AeroSpace starts this from three hooks that fire
+# together (a new window is detected, takes focus, and may change the
+# workspace). "Is there a lock file? no: create one" let two of them
+# through in the gap between the test and the touch, and both then issued
+# the same layout commands interleaved. mkdir tests and takes the lock in
+# one step. A lock older than 2 s belongs to a run that died.
+LOCK="/tmp/omacosy-arrange-$UID.d"
+if ! mkdir "$LOCK" 2>/dev/null; then
   now=$(date +%s)
-  then=$(stat -f %m "$LOCK" 2>/dev/null || echo 0)
-  if [ $((now - then)) -lt 2 ]; then
+  taken=$(stat -f %m "$LOCK" 2>/dev/null || echo 0)
+  if [ $((now - taken)) -lt 2 ]; then
     exit 0
   fi
-  rm -f "$LOCK"
+  rmdir "$LOCK" 2>/dev/null
+  mkdir "$LOCK" 2>/dev/null || exit 0
 fi
-trap 'rm -f "$LOCK"' EXIT
-touch "$LOCK"
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 WS="$("$A" list-workspaces --focused 2>/dev/null | head -1)"
 [ -n "$WS" ] || WS=1
@@ -187,8 +193,8 @@ while [ "$i" -lt "$n" ]; do
   j=$((i + 1))
   while [ "$j" -lt "$n" ]; do
     if [ "${NORMAL_IDS[$j]}" -lt "${NORMAL_IDS[$i]}" ] 2>/dev/null; then
-      t="${NORMAL_IDS[$i]}"; NORMAL_IDS[$i]="${NORMAL_IDS[$j]}"; NORMAL_IDS[$j]="$t"
-      t="${NORMAL_LAY[$i]}"; NORMAL_LAY[$i]="${NORMAL_LAY[$j]}"; NORMAL_LAY[$j]="$t"
+      t="${NORMAL_IDS[i]}"; NORMAL_IDS[i]="${NORMAL_IDS[j]}"; NORMAL_IDS[j]="$t"
+      t="${NORMAL_LAY[i]}"; NORMAL_LAY[i]="${NORMAL_LAY[j]}"; NORMAL_LAY[j]="$t"
     fi
     j=$((j + 1))
   done

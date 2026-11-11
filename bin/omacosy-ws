@@ -69,6 +69,7 @@ case "$op" in
     else
       all="$("$A" list-workspaces --monitor "$mon" | grep -vx hidden | tr '\n' ' ')"
     fi
+    # shellcheck disable=SC2086  # one workspace per word, split on purpose
     target="$(printf '%s\n' $all | awk -v cur="$cur" -v dir="$op" '
       { ws[NR] = $0 }
       END {

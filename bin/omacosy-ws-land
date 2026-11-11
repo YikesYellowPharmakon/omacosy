@@ -5,9 +5,19 @@
 #  - if this destination has a parked fullscreen page, put it back
 set -euo pipefail
 
-REAL="${AEROSPACE_REAL:-/opt/homebrew/Caskroom/aerospace/0.21.3-Beta/AeroSpace-v0.21.3-Beta/bin/aerospace}"
-[ -x "$REAL" ] || REAL=/opt/homebrew/Caskroom/aerospace/0.21.3-Beta/AeroSpace-v0.21.3-Beta/bin/aerospace
-[ -x "$REAL" ] || exit 0
+# The real CLI, not aerospace-wrap (which is what /opt/homebrew/bin/aerospace
+# is on the machine this was written for). Homebrew's directory carries the
+# version; with it written out here this script stopped doing anything,
+# silently, on the first AeroSpace upgrade.
+REAL="${AEROSPACE_REAL:-}"
+if [ ! -x "$REAL" ]; then
+  REAL=""
+  for candidate in /opt/homebrew/Caskroom/aerospace/*/AeroSpace-v*/bin/aerospace \
+    /usr/local/Caskroom/aerospace/*/AeroSpace-v*/bin/aerospace; do
+    if [ -x "$candidate" ]; then REAL="$candidate"; fi
+  done
+fi
+[ -n "$REAL" ] || exit 0
 
 HOLD="${XDG_STATE_HOME:-$HOME/.local/state}/omacosy/fs-hold"
 mkdir -p "$(dirname "$HOLD")"

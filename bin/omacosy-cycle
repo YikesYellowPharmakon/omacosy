@@ -30,6 +30,7 @@ WINS="$("$A" list-windows --workspace focused --format '%{window-id}' 2>/dev/nul
 [ -n "$WINS" ] || exit 0
 CURRENT="$("$A" list-windows --focused --format '%{window-id}' 2>/dev/null || true)"
 
+# shellcheck disable=SC2086  # one window id per word, split on purpose
 target="$(printf '%s\n' $WINS | awk -v cur="$CURRENT" -v dir="$dir" '
   { w[NR] = $0 }
   END {
