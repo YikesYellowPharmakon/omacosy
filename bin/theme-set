@@ -12,7 +12,7 @@ case "${1:-list}" in
     current="$(basename "$(readlink "$CURRENT_DIR/theme" 2>/dev/null || true)")"
     for t in "$THEMES_DIR"/*/; do
       name="$(basename "$t")"
-      n="$(find "$t/backgrounds" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.heic' \) 2>/dev/null | wc -l | tr -d ' ')"
+      n="$(find "$t/backgrounds" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.heic' \) 2>/dev/null | wc -l | tr -d ' ' || true)"
       mark=""
       [ "$name" = "$current" ] && mark=" *"
       printf '%s  (%s walls)%s\n' "$name" "$n" "$mark"
@@ -42,12 +42,6 @@ fi
 
 resolve_wall() {
   local hint="${1:-}"
-  if [ "$hint" = "__rain__" ] || [ "$hint" = "rain" ]; then
-    if [ -f "$THEMES_DIR/$NAME/lock.png" ]; then
-      echo "$THEMES_DIR/$NAME/lock.png"
-      return
-    fi
-  fi
   if [ -n "$hint" ]; then
     if [ -f "$hint" ]; then
       echo "$(cd "$(dirname "$hint")" && pwd)/$(basename "$hint")"
@@ -75,18 +69,18 @@ resolve_wall() {
       return
     fi
   fi
-  ls "$THEMES_DIR/$NAME"/backgrounds/* 2>/dev/null | head -1
+  # the theme's first background, or nothing: a theme may ship none
+  local first
+  for first in "$THEMES_DIR/$NAME"/backgrounds/*; do
+    if [ -e "$first" ]; then
+      echo "$first"
+      return
+    fi
+  done
 }
 
 WALL="$(resolve_wall "${2:-}")"
-SKIP_WALL=0
-if [ "$NAME" = "enter-the-matrix" ]; then
-  rain_hint="${2:-}"
-  if [ "$rain_hint" = "__rain__" ] || [ "$rain_hint" = "rain" ]; then
-    SKIP_WALL=1
-  fi
-fi
-if [ "$SKIP_WALL" = 0 ] && [ -n "$WALL" ] && [ -f "$WALL" ]; then
+if [ -n "$WALL" ] && [ -f "$WALL" ]; then
   ln -nsf "$WALL" "$STATE_DIR/background"
   ln -nsf "$WALL" "$BG_DIR/$NAME"
   if [ -x "$HOME/.local/bin/omacosy-helper" ]; then
@@ -133,19 +127,6 @@ if sec:
     t = t[:sec.start()] + new + t[sec.end():]
     open(path, 'w').write(t)
 PY
-  fi
-fi
-
-if [ -x "$REPO_DIR/bin/matrix-rain-ctl" ]; then
-  rain_hint="${2:-}"
-  if [ "$NAME" = "enter-the-matrix" ]; then
-    if [ "$rain_hint" = "__rain__" ] || [ "$rain_hint" = "rain" ]; then
-      "$REPO_DIR/bin/matrix-rain-ctl" apply "$NAME" "__rain__" >/dev/null 2>&1 || true
-    else
-      "$REPO_DIR/bin/matrix-rain-ctl" apply "$NAME" "${WALL:-}" >/dev/null 2>&1 || true
-    fi
-  else
-    "$REPO_DIR/bin/matrix-rain-ctl" apply "$NAME" >/dev/null 2>&1 || true
   fi
 fi
 

@@ -255,6 +255,13 @@ launchctl bootout "gui/$(id -u)/com.omacosy.dwindle" 2>/dev/null || true
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" "$HOME/.local/bin/omacosy-dwindle"
 
+# The screensavers are gone as well (the Ghostty idle screensaver, Matrix
+# rain, Vapor). A machine upgrading from an install that had them still
+# has their agents loaded and the system screen saver pointed at a bundle
+# nobody builds any more; this unloads, removes and hands the screen saver
+# back to macOS. It finds nothing to do anywhere else.
+"$REPO_DIR/retire-screensaver.sh"
+
 # focus-follows-mouse daemon (own binary so helper rebuilds never
 # invalidate its Accessibility grant); runs as a launchd agent
 if [ ! -x "$HOME/.local/bin/omacosy-ffm" ] || [ "$REPO_DIR/helper/ffm.swift" -nt "$HOME/.local/bin/omacosy-ffm" ]; then

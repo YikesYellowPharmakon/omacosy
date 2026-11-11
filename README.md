@@ -34,7 +34,7 @@ hatch.
   workspace instead of handing focus to whatever you used last, so the
   desktop does not jump. Click the dock icon or `Cmd-Tab` to bring
   them back to the workspace you are on.
-- **Bar, dock, overview, screensaver** are all themed. The native menu
+- **Bar, dock, overview** are all themed. The native menu
   bar stays hidden; the native Dock stays buried. Hover the bottom
   edge for the capsule dock. Four-finger swipe for workspaces and
   overview.
@@ -48,8 +48,7 @@ Full chord list: [`docs/omacosy-键位设置.html`](docs/omacosy-键位设置.ht
 ## Themes
 
 Five palettes. One switch paints the bar pills, the dock icons
-(including Ghostty's), the window ring, terminals, Neovim, and the
-lock screen (same wallpaper as the desktop).
+(including Ghostty's), the window ring, terminals, and Neovim.
 
 | Theme | Feel | Accent |
 |---|---|---|
@@ -84,7 +83,6 @@ What a theme actually recolors:
 - **Windows:** focus ring (`omacosy-borders`), AeroSpace gaps.
 - **Terminal:** Ghostty palette, cursor shaders (idle work skipped so
   typing does not stutter), Neovim cursor pulse.
-- **Lock screen:** same wallpaper as the desktop.
 
 `no-bad-memories` samples its palette from the MV / album art. That
 wallpaper lives under `themes/no-bad-memories/backgrounds/` and is
@@ -137,14 +135,6 @@ closes it. The parking workspace never appears as a card.
 `Option-K` opens the cheatsheet from
 [`docs/omacosy-键位设置.html`](docs/omacosy-键位设置.html). Type to
 filter. Esc closes.
-
-## Screensaver
-
-Idle five minutes: Ghostty + ttfx on the built-in display only, 120
-fps, shuffle-bag so an effect does not repeat until the set has
-played. Seven more minutes: display off and lock. External screens
-stay dark covers. Apple menu → Screensaver starts it now. A key or
-click exits and locks. No desktop rain.
 
 ## Keys that matter
 
@@ -254,8 +244,8 @@ shape on macOS 26.
 
 MIT. Upstream copyright Paul Spende; this tree keeps that license
 and history. Local work is the rice: Super as Option, the five
-themes, the themed Ghostty dock icon, hide-without-jumping, the
-Ghostty screensaver, and the rest of the chrome on this machine.
+themes, the themed Ghostty dock icon, hide-without-jumping, and the
+rest of the chrome on this machine.
 
 Also standing on [omarchy](https://omarchy.org),
 [AeroSpace](https://github.com/nikitabobko/AeroSpace),

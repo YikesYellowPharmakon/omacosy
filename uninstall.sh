@@ -4,6 +4,7 @@
 # where install.sh made them). Homebrew packages are left installed.
 
 set -uo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
 
@@ -84,6 +85,10 @@ if have "cloned-aerospace-swipe" && [ -d "$HOME/.local/share/aerospace-swipe" ];
   rm -f "$HOME/Library/LaunchAgents/com.acsandmann.swipe.plist"
   rm -rf "$HOME/.local/share/aerospace-swipe" "$HOME/.config/aerospace-swipe"
 fi
+
+# an install from before the screensavers were retired: their agents,
+# their files, and the system screen saver settings they overrode
+"$REPO_DIR/retire-screensaver.sh" || true
 
 # --- 2. Native menu bar + system gestures back ------------------------------
 # Preferred path: restore each key to its RECORDED pre-omacosy value

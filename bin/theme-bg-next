@@ -32,18 +32,11 @@ on run argv
 end run
 APPLESCRIPT
   fi
-  # Do not call apply-wallpaper here. That path seals the lock image and
-  # restarts WallpaperAgent, which reloads the stale Desktop entry from
-  # Index.plist (still The Office) and undoes the cycle.
 }
 
 if [ $# -gt 0 ]; then
   [ -f "$1" ] || { echo "no such image: $1" >&2; exit 1; }
   set_bg "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
-  if [ -x "$HOME/.local/share/omacosy/bin/matrix-rain-ctl" ]; then
-    THEME_NAME="$(basename "$(readlink "$CURRENT_THEME" 2>/dev/null || true)")"
-    "$HOME/.local/share/omacosy/bin/matrix-rain-ctl" apply "${THEME_NAME:-}" "$1" >/dev/null 2>&1 || true
-  fi
   exit 0
 fi
 
@@ -57,7 +50,6 @@ while IFS= read -r f; do BACKGROUNDS+=("$f"); done < <(
     ! -iname 'lock.png' ! -iname 'lock-ui.png' ! -iname 'unlock.png' ! -iname 'void.png' \
     2>/dev/null | sort
 )
-THEME_NAME="$(basename "$(readlink "$CURRENT_THEME" 2>/dev/null || true)")"
 if [ "${#BACKGROUNDS[@]}" -eq 0 ]; then
   echo "theme has no backgrounds" >&2
   exit 1
@@ -80,6 +72,3 @@ for i in "${!BACKGROUNDS[@]}"; do
   fi
 done
 set_bg "$NEXT"
-if [ -x "$HOME/.local/share/omacosy/bin/matrix-rain-ctl" ]; then
-  "$HOME/.local/share/omacosy/bin/matrix-rain-ctl" apply "${THEME_NAME:-}" "$NEXT" >/dev/null 2>&1 || true
-fi

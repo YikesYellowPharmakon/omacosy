@@ -83,12 +83,6 @@ run = 'layout floating'
 if.window-title-regex-substring = 'omacosy-activity'
 run = 'layout floating'
 
-# Official Omarchy screensaver is a fullscreen terminal overlay, not a tile.
-[[on-window-detected]]
-if.app-id = 'com.mitchellh.ghostty'
-if.window-title-regex-substring = 'omacosy-screensaver'
-run = ['layout floating', 'fullscreen on --no-outer-gaps']
-
 [[on-window-detected]]
 if.app-id = 'com.google.Chrome'
 if.window-title-regex-substring = 'Picture-in-Picture'

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import colorsys
-import datetime
 import json
 import plistlib
 import re
@@ -18,7 +17,6 @@ from pathlib import Path
 PAIR = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"?(#?[0-9A-Fa-f]{6})"?\s*$')
 FONT = "JetBrainsMonoNL Nerd Font Mono"
 FONT_FALLBACK = "JetBrainsMono Nerd Font Mono"
-STORE = Path.home() / "Library/Application Support/com.apple.wallpaper/Store/Index.plist"
 TYPO = Path.home() / "Library/Application Support/abnerworks.Typora/themes"
 CURSOR = Path.home() / "Library/Application Support/Cursor/User/settings.json"
 VSCODE = Path.home() / "Library/Application Support/Code/User/settings.json"
@@ -29,7 +27,6 @@ BAT_CONF = Path.home() / ".config/bat/config"
 LAZYGIT = Path.home() / ".config/lazygit/config.yml"
 DELTA_GIT = Path.home() / ".config/omacosy/delta.gitconfig"
 GITCONFIG = Path.home() / ".gitconfig"
-SAVER_DIR = Path.home() / ".local/state/omacosy/screensaver"
 COLOR_DIR = Path.home() / ".local/state/omacosy/color"
 
 APPLE_HEX = {
@@ -58,11 +55,6 @@ PRESETS = {
 # paints AppleHighlightColor, so the raw accent reads as gray. Pin the
 # input highlight to system blue; borders still use the theme accent.
 IME_BLUE_THEMES = {"azure"}
-
-# Lock screen still image, written into the wallpaper store's Idle
-# entry only. Other themes keep the system lock (screensaver provider).
-# WallpaperAgent is never killed: restarting it flashes the stale desktop.
-LOCK_IMAGE_THEMES = {"space-monkey"}
 
 
 def parse_colors(path: Path) -> dict[str, str]:
@@ -2021,8 +2013,6 @@ def write_sidecars(theme_dir: Path, colors: dict[str, str] | None = None) -> dic
     (theme_dir / "shell.env").write_text(render_shell_env(colors), encoding="utf-8")
     (theme_dir / "btop.theme").write_text(render_btop(colors), encoding="utf-8")
     (theme_dir / "bat.tmTheme").write_bytes(render_tmtheme(colors))
-    if not ((theme_dir / "lock.png").is_file() and (theme_dir / "lock.png").stat().st_size > 80_000):
-        generate_lock_ui(theme_dir, colors)
     (theme_dir / "neovim.lua").write_text(render_neovim(colors), encoding="utf-8")
     ensure_nvim_init()
     write_herdr(theme_dir, colors)
@@ -2603,113 +2593,6 @@ def write_delta(colors: dict[str, str]) -> None:
         GITCONFIG.write_text(raw + extra, encoding="utf-8")
 
 
-GLYPHS = {
-    "A": "0111010001111111000110001",
-    "B": "1111010001111101000111110",
-    "C": "0111110000100001000001111",
-    "D": "1111010001100011000111110",
-    "E": "1111110000111101000011111",
-    "F": "1111110000111101000010000",
-    "G": "0111110000101111000101111",
-    "H": "1000110001111111000110001",
-    "I": "1111100100001000010011111",
-    "J": "0011100010000101001001110",
-    "K": "1000110010111001001010001",
-    "L": "1000010000100001000011111",
-    "M": "1000111011101011000110001",
-    "N": "1000111001101011001110001",
-    "O": "0111010001100011000101110",
-    "P": "1111010001111101000010000",
-    "Q": "0111010001100011001001111",
-    "R": "1111010001111101001010001",
-    "S": "0111110000011100000111110",
-    "T": "1111100100001000010000100",
-    "U": "1000110001100011000101110",
-    "V": "1000110001100010101000100",
-    "W": "1000110001101011101110001",
-    "X": "1000101010001000101010001",
-    "Y": "1000101010001000010000100",
-    "Z": "1111100010001000100011111",
-    "-": "0000000000011100000000000",
-    " ": "0000000000000000000000000",
-}
-
-
-def write_png(path: Path, width: int, height: int, rgb: bytes) -> None:
-    def chunk(tag: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-
-    raw = b"".join(b"\x00" + rgb[y * width * 3 : (y + 1) * width * 3] for y in range(height))
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
-
-
-def _put(pixels: bytearray, width: int, x: int, y: int, color: tuple[int, int, int]) -> None:
-    if 0 <= x < width and y >= 0:
-        idx = (y * width + x) * 3
-        if 0 <= idx + 2 < len(pixels):
-            pixels[idx] = color[0]
-            pixels[idx + 1] = color[1]
-            pixels[idx + 2] = color[2]
-
-
-def _text(pixels: bytearray, width: int, text: str, cx: int, cy: int, scale: int, color: tuple[int, int, int]) -> None:
-    text = "".join(ch if ch in GLYPHS else "-" for ch in text.upper())
-    tw = len(text) * 6 * scale
-    x0 = cx - tw // 2
-    y0 = cy - (7 * scale) // 2
-    for i, ch in enumerate(text):
-        bits = GLYPHS[ch]
-        for row in range(5):
-            for col in range(5):
-                if bits[row * 5 + col] != "1":
-                    continue
-                for dy in range(scale):
-                    for dx in range(scale):
-                        _put(pixels, width, x0 + i * 6 * scale + col * scale + dx, y0 + row * scale + dy, color)
-
-
-def _rect(pixels: bytearray, width: int, x: int, y: int, w: int, h: int, color: tuple[int, int, int], fill: bool = True) -> None:
-    for yy in range(y, y + h):
-        for xx in range(x, x + w):
-            if fill or xx in (x, x + w - 1) or yy in (y, y + h - 1):
-                _put(pixels, width, xx, yy, color)
-
-
-def generate_lock_ui(theme_dir: Path, colors: dict[str, str], width: int = 2560, height: int = 1600) -> Path:
-    dest = theme_dir / "lock-ui.png"
-    bg = hex_to_rgb(colors.get("darker_background", colors.get("color0", colors["background"])))
-    accent = hex_to_rgb(colors["accent"])
-    muted = hex_to_rgb(colors.get("muted", colors.get("color8", colors["foreground"])))
-    fg = hex_to_rgb(colors["foreground"])
-    wash = hex_to_rgb(colors.get("background", colors["background"]))
-    pixels = bytearray(width * height * 3)
-    cx, cy = width // 2, height // 2 - 40
-    for y in range(height):
-        vy = y / (height - 1)
-        for x in range(width):
-            vx = x / (width - 1)
-            vignette = ((vx - 0.5) ** 2 + (vy - 0.48) ** 2) ** 0.5
-            t = min(1.0, vignette * 1.6)
-            color = (
-                int(wash[0] * (1 - t) + bg[0] * t),
-                int(wash[1] * (1 - t) + bg[1] * t),
-                int(wash[2] * (1 - t) + bg[2] * t),
-            )
-            idx = (y * width + x) * 3
-            pixels[idx:idx + 3] = bytes(color)
-    _text(pixels, width, "OMARCHY", cx, cy - 70, 14, accent)
-    _rect(pixels, width, cx - 18, cy + 40, 36, 28, accent, False)
-    _rect(pixels, width, cx - 10, cy + 28, 20, 16, accent, False)
-    _rect(pixels, width, cx - 160, cy + 92, 320, 36, muted, False)
-    for i, px in enumerate((cx - 70, cx - 35, cx, cx + 35, cx + 70)):
-        _rect(pixels, width, px, cy + 104, 10, 10, fg if i < 3 else muted, True)
-    label = theme_dir.name.replace("-", " ")
-    _text(pixels, width, label[:22], cx, height - 90, 4, muted)
-    write_png(dest, width, height, bytes(pixels))
-    return dest
-
-
 LOGO_NAMES = {"omarchy.webp", "omarchy.png", "omarchy.jpg", "omarchy.jpeg"}
 
 
@@ -2741,34 +2624,6 @@ def real_backgrounds(theme_dir: Path) -> list[Path]:
             continue
         out.append(p)
     return out
-
-
-def resolve_lock(theme_dir: Path, colors: dict[str, str] | None = None) -> Path | None:
-    art = theme_dir / "lock.png"
-    if art.is_file() and art.stat().st_size > 80_000:
-        return art
-    bg = theme_dir / "backgrounds"
-    if bg.is_dir():
-        branded = [p for p in bg.iterdir() if is_lock_art(p)]
-        if branded:
-            return max(branded, key=lambda p: p.stat().st_size)
-    ui = theme_dir / "lock-ui.png"
-    if colors is not None:
-        ui = generate_lock_ui(theme_dir, colors)
-    if ui.is_file() and ui.stat().st_size > 20_000:
-        return ui
-    return art if art.is_file() else None
-
-
-def seal_lock(lock_image: Path, surfaces: tuple[str, ...] = ("Idle",)) -> None:
-    if not STORE.is_file() or not lock_image.is_file():
-        return
-    try:
-        data = plistlib.loads(STORE.read_bytes())
-        _patch_surfaces(data, lock_image, surfaces)
-        STORE.write_bytes(plistlib.dumps(data, fmt=plistlib.FMT_BINARY))
-    except Exception:
-        pass
 
 
 def desktop_already(desktop: Path) -> bool:
@@ -2817,134 +2672,14 @@ def set_desktop_image(desktop: Path) -> None:
         )
 
 
-def set_desktop_then_lock(desktop: Path, lock_image: Path) -> None:
-    # lock_image is unused on the live path. Sealing Idle and restarting
-    # WallpaperAgent is what flashed Golden Gate and prompted for access.
-    del lock_image
-    set_desktop_image(desktop)
-
-
-def seal_idle_image(lock_image: Path) -> None:
-    """Point the lock screen at a still image.
-
-    Desktop entries stay untouched, and WallpaperAgent is not restarted.
-    """
-    if not STORE.is_file() or not lock_image.is_file():
-        return
-    try:
-        data = plistlib.loads(STORE.read_bytes())
-    except Exception:
-        return
-    config = _first_desktop_config(data)
-    lock_url = lock_image.resolve().as_uri()
-    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-
-    def walk(node) -> None:
-        if isinstance(node, dict):
-            idle = node.get("Idle")
-            desktop = node.get("Desktop")
-            if isinstance(idle, dict):
-                encoded = None
-                if isinstance(desktop, dict):
-                    content = desktop.get("Content")
-                    if isinstance(content, dict):
-                        encoded = content.get("EncodedOptionValues")
-                content = idle.setdefault("Content", {})
-                choices = content.setdefault("Choices", [{}])
-                if not choices or not isinstance(choices[0], dict):
-                    choices[:] = [{}]
-                choices[0]["Provider"] = "com.apple.wallpaper.choice.image"
-                choices[0]["Files"] = [{"relative": lock_url}]
-                if config:
-                    choices[0]["Configuration"] = config
-                if encoded:
-                    content["EncodedOptionValues"] = encoded
-                idle["LastSet"] = now
-                idle["LastUse"] = now
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(data)
-    try:
-        STORE.write_bytes(plistlib.dumps(data, fmt=plistlib.FMT_BINARY))
-    except Exception:
-        pass
-
-
-def apply_lock_and_saver(theme_dir: Path, wallpaper: Path | None = None, colors: dict[str, str] | None = None) -> None:
+def apply_wallpaper(theme_dir: Path, wallpaper: Path | None = None) -> None:
+    """Make sure the desktop shows a real background of this theme."""
     walls = real_backgrounds(theme_dir)
     desktop = wallpaper if wallpaper and wallpaper.is_file() else (walls[0] if walls else None)
     if desktop and (is_lock_art(desktop) or desktop.name.lower() in {"lock.png", "lock-ui.png"}):
         desktop = walls[0] if walls else None
     if desktop:
         set_desktop_image(desktop)
-    if theme_dir.name in LOCK_IMAGE_THEMES:
-        lock_image = resolve_lock(theme_dir, colors)
-        if lock_image is not None:
-            seal_idle_image(lock_image)
-    # Ghostty + ttfx is the screensaver for every theme. Theme switches
-    # must not revive the system .saver or Ken Burns idle timer.
-    subprocess.run(
-        ["defaults", "-currentHost", "write", "com.apple.screensaver", "idleTime", "-int", "0"],
-        check=False,
-    )
-
-
-def _first_desktop_config(obj) -> bytes:
-    if isinstance(obj, dict):
-        desktop = obj.get("Desktop")
-        if isinstance(desktop, dict):
-            for choice in desktop.get("Content", {}).get("Choices", []) or []:
-                cfg = choice.get("Configuration")
-                if isinstance(cfg, (bytes, bytearray)) and cfg:
-                    return bytes(cfg)
-        for value in obj.values():
-            found = _first_desktop_config(value)
-            if found:
-                return found
-    elif isinstance(obj, list):
-        for item in obj:
-            found = _first_desktop_config(item)
-            if found:
-                return found
-    return b""
-
-
-def _patch_idle_only(obj, lock: Path) -> None:
-    _patch_surfaces(obj, lock, ("Idle",))
-
-
-def _patch_surfaces(obj, image: Path, surfaces: tuple[str, ...]) -> None:
-    lock_url = image.resolve().as_uri()
-    config = _first_desktop_config(obj)
-    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-
-    def walk(node) -> None:
-        if isinstance(node, dict):
-            for key in surfaces:
-                block = node.get(key)
-                if not isinstance(block, dict):
-                    continue
-                content = block.setdefault("Content", {})
-                choices = content.setdefault("Choices", [{}])
-                if not choices:
-                    choices.append({})
-                choices[0]["Provider"] = "com.apple.wallpaper.choice.image"
-                choices[0]["Files"] = [{"relative": lock_url}]
-                if config:
-                    choices[0]["Configuration"] = config
-                block["LastSet"] = now
-                block["LastUse"] = now
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(obj)
 
 
 def defaults_write(domain: str, key: str, typ: str, value: str) -> None:
@@ -3226,7 +2961,7 @@ def apply(theme_dir: Path, wallpaper: Path | None = None, color_mode: str | None
     write_bat(colors)
     write_lazygit(colors)
     write_delta(colors)
-    apply_lock_and_saver(theme_dir, wallpaper, colors)
+    apply_wallpaper(theme_dir, wallpaper)
     # Wallpaper is settled. Ask windows to retint without restarting
     # Finder, Preview, or the wallpaper agent.
     post_chrome_notifications(appearance=False)
@@ -3243,17 +2978,7 @@ def main() -> int:
         write_sidecars(theme_dir)
         return 0
     if sys.argv[1] == "apply-wallpaper":
-        walls = real_backgrounds(theme_dir)
-        lock_image = resolve_lock(theme_dir)
-        desktop = wallpaper if wallpaper and wallpaper.is_file() else (walls[0] if walls else None)
-        if desktop and (is_lock_art(desktop) or desktop.name.lower() in {"lock.png", "lock-ui.png"}):
-            desktop = walls[0] if walls else None
-        if desktop and lock_image:
-            set_desktop_then_lock(desktop, lock_image)
-        elif desktop:
-            helper = Path.home() / ".local/bin/omacosy-helper"
-            if helper.is_file():
-                subprocess.run([str(helper), "wallpaper", str(desktop)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        apply_wallpaper(theme_dir, wallpaper)
         return 0
     apply(theme_dir, wallpaper, color_mode)
     return 0

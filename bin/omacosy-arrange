@@ -33,7 +33,7 @@ keep_float() {
       return 0 ;;
   esac
   case "$2" in
-    *omacosy-activity*|*omacosy-screensaver*|*Picture-in-Picture*)
+    *omacosy-activity*|*Picture-in-Picture*)
       return 0 ;;
   esac
   return 1
@@ -115,11 +115,6 @@ for line in sys.stdin:
 
 # importing Quartz takes ~200 ms; the tiling below need not wait for it
 reap_stale_windows &
-
-if "$A" list-windows --workspace focused --format '%{window-title}' 2>/dev/null \
-    | grep -q 'omacosy-screensaver'; then
-  exit 0
-fi
 
 NORMAL_IDS=()
 NORMAL_LAY=()

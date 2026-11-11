@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Native lock only. Enter the Matrix rain is a screensaver, not a lock.
-exec "$HOME/.local/bin/omacosy-helper" lock

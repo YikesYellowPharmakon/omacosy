@@ -151,17 +151,16 @@ def pick_theme() -> str | None:
 
 def pick_wallpaper(name: str) -> Path | None:
     items = walls(THEMES / name)
-    live = (STATE / "live").read_text(encoding="utf-8").strip() if (STATE / "live").is_file() else ""
     if name == "enter-the-matrix":
         items = [p for p in items if p.name.lower() != "void.png"]
         if not items:
             return None
         remembered = remembered_wall(name)
-        labels = ["下一张", "随机一张", "动态数字雨"]
-        lookup: dict[str, Path | str] = {"下一张": "next", "随机一张": "random", "动态数字雨": "rain"}
+        labels = ["下一张", "随机一张"]
+        lookup: dict[str, Path | str] = {"下一张": "next", "随机一张": "random"}
         for path in items:
             label = path.stem
-            if remembered and path.resolve() == remembered.resolve() and live != "rain":
+            if remembered and path.resolve() == remembered.resolve():
                 label = f"{label}  ← 当前"
             labels.append(label)
             lookup[label] = path
@@ -173,12 +172,10 @@ def pick_wallpaper(name: str) -> Path | None:
             ),
             next((lab for lab in labels if "the-office" in lab or "office-crt" in lab), labels[-1] if labels else "下一张"),
         )
-        picked = choose(f"{name}：选择壁纸（{len(items)} 张静态 + 动态雨）", labels, default)
+        picked = choose(f"{name}：选择壁纸（{len(items)} 张）", labels, default)
         if not picked:
             return None
         value = lookup[picked]
-        if value == "rain":
-            return Path("__rain__")
         if value == "random":
             import random
 
