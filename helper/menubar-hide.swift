@@ -91,40 +91,6 @@ func axNativeFullscreen() -> Bool? {
     return fs as? Bool
 }
 
-var ssCheckedAt = Date.distantPast
-var ssCached = false
-func screensaverRunning() -> Bool {
-    if Date().timeIntervalSince(ssCheckedAt) < 0.25 { return ssCached }
-    ssCheckedAt = Date()
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/bin/ps")
-    p.arguments = ["-axo", "command="]
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = FileHandle.nullDevice
-    guard (try? p.run()) != nil else {
-        ssCached = false
-        return false
-    }
-    let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    p.waitUntilExit()
-    ssCached = omacosyScreensaverProcessVisible(in: text)
-    return ssCached
-}
-
-func omacosyScreensaverProcessVisible(in text: String) -> Bool {
-    for raw in text.split(whereSeparator: \.isNewline) {
-        let line = String(raw)
-        if line.contains("omacosy-screensaver-idle") { continue }
-        if line.contains("omacosy-launch-screensaver") { continue }
-        if line.contains("ghostty-screensaver.conf") { return true }
-        if line.range(of: #"/omacosy-screensaver(?:\s|$)"#, options: .regularExpression) != nil {
-            return true
-        }
-    }
-    return false
-}
-
 func geometricFullscreen() -> Bool {
     guard let front = NSWorkspace.shared.frontmostApplication,
           front.bundleIdentifier != "com.omacosy.bar" else { return false }
@@ -185,7 +151,7 @@ func buryNativeMenuBar() {
     for d in displays() {
         _ = SLSSetMenuBarVisibilityOverrideOnDisplay(cid, d, true)
     }
-    let coverSeam = geometricFullscreen() || screensaverRunning()
+    let coverSeam = geometricFullscreen()
     for wid in menubarWindowIDs() {
         _ = SLSSetWindowAlpha(cid, wid, 0)
         _ = SLSOrderWindow(cid, wid, coverSeam ? kCGSOrderBelow : kCGSOrderAbove, 0)

@@ -319,40 +319,6 @@ func safeTop(for d: CGRect) -> CGFloat {
 // twice per tick, which adds up across a drag.
 var omniwmCached = false
 var omniwmCheckedAt = Date.distantPast
-var ssCheckedAt = Date.distantPast
-var ssCached = false
-func screensaverRunning() -> Bool {
-    if Date().timeIntervalSince(ssCheckedAt) < 0.25 { return ssCached }
-    ssCheckedAt = Date()
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/bin/ps")
-    p.arguments = ["-axo", "command="]
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = FileHandle.nullDevice
-    guard (try? p.run()) != nil else {
-        ssCached = false
-        return false
-    }
-    let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    p.waitUntilExit()
-    ssCached = omacosyScreensaverProcessVisible(in: text)
-    return ssCached
-}
-
-func omacosyScreensaverProcessVisible(in text: String) -> Bool {
-    for raw in text.split(whereSeparator: \.isNewline) {
-        let line = String(raw)
-        if line.contains("omacosy-screensaver-idle") { continue }
-        if line.contains("omacosy-launch-screensaver") { continue }
-        if line.contains("ghostty-screensaver.conf") { return true }
-        if line.range(of: #"/omacosy-screensaver(?:\s|$)"#, options: .regularExpression) != nil {
-            return true
-        }
-    }
-    return false
-}
-
 func omniwmActive() -> Bool {
     if Date().timeIntervalSince(omniwmCheckedAt) < 0.5 { return omniwmCached }
     omniwmCheckedAt = Date()
@@ -591,12 +557,6 @@ func tick() {
     }
     let (f, appName) = hit
     missSince = nil
-
-    if appName.contains("ghostty"), screensaverRunning() {
-        hideRing("screensaver")
-        syncShroud(nil)
-        return
-    }
 
     // fullscreen is deliberate, not a transient: drop the ring at once
     // and cover the notch strip on displays that have one

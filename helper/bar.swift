@@ -1816,8 +1816,6 @@ func appleRows() -> [PopupRow] {
         // locks depends on the screenLock delay, so it usually did not
         PopupRow(text: "Lock Screen",
                  action: run("\(NSHomeDirectory())/.local/bin/omacosy-helper", ["lock"])),
-        PopupRow(text: "Screensaver",
-                 action: run("\(NSHomeDirectory())/.local/bin/omacosy-launch-screensaver", [])),
         PopupRow(text: "Sleep", action: run("/usr/bin/pmset", ["sleepnow"])),
         PopupRow(text: "Restart…", action: systemEvents("restart")),
         PopupRow(text: "Shut Down…", action: systemEvents("shut down")),
@@ -2058,12 +2056,6 @@ func appleMenuRows() -> [PopupRow] {
     var rows = rowsForMenu(apple, collapseAlternates: true)
     guard !rows.isEmpty else { return appleRows() }
     if rows.last?.separator != true { rows.append(PopupRow(separator: true)) }
-    rows.append(PopupRow(text: "Screensaver", action: {
-        closePopup()
-        DispatchQueue.global(qos: .userInitiated).async {
-            _ = shell("\(NSHomeDirectory())/.local/bin/omacosy-launch-screensaver", [])
-        }
-    }))
     rows.append(PopupRow(text: "Theme", action: {
         themePickerOpen = true
         refreshPopup()
@@ -2998,7 +2990,7 @@ final class BarView: NSView {
             showPopup("apple", under: window?.convertToScreen(convert(appleRect, to: nil)) ?? appleRect,
                       on: surface, alignLeft: true)
             // activate() is async and steals key from the popup, so the
-            // first click on Screensaver only focused the menu.
+            // first click on a row only focused the menu.
             DispatchQueue.main.async {
                 popupWindow?.makeKeyAndOrderFront(nil)
             }
@@ -3278,55 +3270,9 @@ func safeTop(for display: CGRect) -> CGFloat {
     return 0
 }
 
-var ssCheckedAt = Date.distantPast
-var ssCached = false
-
-func screensaverActive() -> Bool {
-    if Date().timeIntervalSince(ssCheckedAt) < 0.2 { return ssCached }
-    ssCheckedAt = Date()
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/bin/ps")
-    p.arguments = ["-axo", "command="]
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = FileHandle.nullDevice
-    guard (try? p.run()) != nil else {
-        ssCached = false
-        return false
-    }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
-    let text = String(data: data, encoding: .utf8) ?? ""
-    ssCached = omacosyScreensaverProcessVisible(in: text)
-    return ssCached
-}
-
-// The idle watcher is `…/omacosy-screensaver-idle`. A prefix contains()
-// matched it 24/7 and hid the bar after the next window event.
-func omacosyScreensaverProcessVisible(in text: String) -> Bool {
-    for raw in text.split(whereSeparator: \.isNewline) {
-        let line = String(raw)
-        if line.contains("omacosy-screensaver-idle") { continue }
-        if line.contains("omacosy-launch-screensaver") { continue }
-        if line.contains("ghostty-screensaver.conf") { return true }
-        if line.range(of: #"/omacosy-screensaver(?:\s|$)"#, options: .regularExpression) != nil {
-            return true
-        }
-    }
-    return false
-}
-
 func fullscreenDisplays() -> Set<CGDirectDisplayID> {
     var covered: Set<CGDirectDisplayID> = []
     browserFullscreen = []
-    if screensaverActive() {
-        var ids = [CGDirectDisplayID](repeating: 0, count: 8)
-        var n: UInt32 = 0
-        if CGGetActiveDisplayList(8, &ids, &n) == .success {
-            covered.formUnion(ids.prefix(Int(n)))
-        }
-        return covered
-    }
     // Under OmniWM the width test below cannot separate a tiled window
     // from a fullscreen one: its 0.6.3 dwindle applies no outer gaps
     // (resolved settings say 42, layout applies 0 — upstream bug, see
@@ -3487,10 +3433,6 @@ func pointerAtScreenTop() {
         // Native fullscreen and browser fullscreen own this edge. Chrome
         // slides its own toolbar in on hover; climbing our bar over it
         // is the pop-out.
-        if revealed { setRevealed(false) }
-        return
-    }
-    if screensaverActive() {
         if revealed { setRevealed(false) }
         return
     }

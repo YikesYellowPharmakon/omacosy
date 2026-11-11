@@ -307,97 +307,6 @@ static BOOL systemSpreadUp(NSArray *windows) {
     return NO;
 }
 
-static NSString *runTool(NSString *path, NSArray<NSString *> *args, int *status) {
-    NSTask *task = [NSTask new];
-    task.executableURL = [NSURL fileURLWithPath:path];
-    task.arguments = args;
-    NSPipe *pipe = [NSPipe pipe];
-    task.standardOutput = pipe;
-    task.standardError = [NSPipe pipe];
-    if (![task launchAndReturnError:nil]) {
-        if (status) *status = -1;
-        return nil;
-    }
-    NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
-    [task waitUntilExit];
-    if (status) *status = task.terminationStatus;
-    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-}
-
-// The bar treats any of these processes as a running screensaver and
-// hides on every display. Once the loop outlived its Ghostty window: no
-// terminal, 86% CPU, and the bar stayed hidden until it was killed. A
-// screensaver with no terminal and no window for 10 s is ended here.
-static CFAbsoluteTime orphanSince = 0;
-static CFAbsoluteTime orphanCheckedAt = 0;
-
-// Only the loop script itself or the Ghostty running its config. Anything
-// else that merely names the script still hides the bar, but is not ours
-// to end.
-static BOOL isSaverProcess(NSArray<NSString *> *argv) {
-    NSString *exe = argv.firstObject ?: @"";
-    if ([exe hasSuffix:@"/omacosy-screensaver"]) return YES;
-    NSString *name = exe.lastPathComponent;
-    if (argv.count > 1 && ([name isEqualToString:@"bash"] || [name isEqualToString:@"sh"]))
-        return [argv[1] hasSuffix:@"/omacosy-screensaver"];
-    if ([name.lowercaseString isEqualToString:@"ghostty"])
-        return [[argv componentsJoinedByString:@" "] containsString:@"ghostty-screensaver.conf"];
-    return NO;
-}
-
-static BOOL screensaverWindowListed(void) {
-    int status = 0;
-    NSString *out = runTool(@"/opt/homebrew/bin/aerospace",
-                            @[@"list-windows", @"--all", @"--format", @"%{window-title}"], &status);
-    if (!out || status != 0) return YES;
-    return [out containsString:@"omacosy-screensaver"];
-}
-
-static BOOL screensaverUp(void) {
-    NSString *text = runTool(@"/bin/ps", @[@"-axo", @"pid=,tty=,command="], NULL);
-    if (!text) return YES;
-    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"/omacosy-screensaver(\\s|$)" options:0 error:nil];
-    NSMutableArray<NSNumber *> *pids = [NSMutableArray array];
-    BOOL attached = NO, foreign = NO;
-    for (NSString *raw in [text componentsSeparatedByString:@"\n"]) {
-        NSString *line = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
-        if ([line containsString:@"omacosy-screensaver-idle"]) continue;
-        if ([line containsString:@"omacosy-launch-screensaver"]) continue;
-        BOOL ghostty = [line containsString:@"ghostty-screensaver.conf"];
-        BOOL loop = [re firstMatchInString:line options:0 range:NSMakeRange(0, line.length)] != nil;
-        if (!ghostty && !loop) continue;
-        NSArray *f = [line componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
-        f = [f filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]];
-        if (f.count < 3) return YES;
-        if (!isSaverProcess([f subarrayWithRange:NSMakeRange(2, f.count - 2)])) {
-            foreign = YES;
-            continue;
-        }
-        [pids addObject:@([f[0] intValue])];
-        if (loop && ![f[1] isEqualToString:@"??"]) attached = YES;
-    }
-    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
-    if (now - orphanCheckedAt > 3) orphanSince = 0;
-    orphanCheckedAt = now;
-    if (pids.count == 0) {
-        orphanSince = 0;
-        return foreign;
-    }
-    if (attached || screensaverWindowListed()) {
-        orphanSince = 0;
-        return YES;
-    }
-    if (orphanSince == 0) orphanSince = now;
-    if (now - orphanSince < 10) return YES;
-    for (NSNumber *pid in pids) {
-        if (pid.intValue > 1) kill(pid.intValue, SIGTERM);
-    }
-    orphanSince = 0;
-    logLine([NSString stringWithFormat:@"ended screensaver left without a window (%@)",
-             [pids componentsJoinedByString:@","]]);
-    return foreign;
-}
-
 static NSScreen *screenForDisplay(CGDirectDisplayID display) {
     for (NSScreen *screen in NSScreen.screens) {
         NSNumber *n = screen.deviceDescription[@"NSScreenNumber"];
@@ -532,11 +441,6 @@ static void watchBarPresence(void) {
     }
     if (!overdue) return;
     NSScreen *screen = screenForDisplay(overdue);
-    if (screensaverUp()) {
-        // Recheck every 2 s so a leftover screensaver is ended on time.
-        missingSince[@(overdue)] = @(now - kMissingGraceSeconds + 2);
-        return;
-    }
     if (!mayKickBar()) return;
     if (!aerospaceListsScreen(screen)) {
         missingSince[@(overdue)] = @(now);
@@ -555,8 +459,8 @@ int main(int argc, char **argv) {
             apply();
             CFArrayRef shown = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
             NSArray *onScreen = shown ? (__bridge_transfer NSArray *)shown : @[];
-            printf("watch: locked=%d expose=%d spread=%d screensaver=%d\n",
-                   screenIsLocked(), exposeHeld(), systemSpreadUp(onScreen), screensaverUp());
+            printf("watch: locked=%d expose=%d spread=%d\n",
+                   screenIsLocked(), exposeHeld(), systemSpreadUp(onScreen));
             uint32_t ids[8] = {0};
             uint32_t count = 0;
             CGGetActiveDisplayList(8, ids, &count);
