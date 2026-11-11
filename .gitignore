@@ -1,7 +1,10 @@
 .DS_Store
 *.bak.*
+# Built by install.sh next to the sources when the clone lives at
+# ~/.local/share/omacosy; never tracked.
 /omacosy-bar.app/
 /omacosy-gesture.app/
+/Omacosy Dock.app/
 config/apps.local.conf
 config/aerospace/aerospace.toml
 **/__pycache__/
