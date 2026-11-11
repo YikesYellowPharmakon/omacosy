@@ -704,7 +704,12 @@ sleep 1
 # the settings window, and it costs ~92MB resident to leave open. Launch
 # it only when the service is not already up — i.e. a first run, where it
 # is needed to approve the driver extension.
-if launchctl list 2>/dev/null | grep -qiE 'karabiner[-_]console[-_]user[-_]server'; then
+# The list is captured first. Piped straight into `grep -q`, grep leaves at
+# its first match, launchctl dies of SIGPIPE on its next write, and under
+# pipefail the pipeline then reads as "not found": the settings app was
+# opened on runs where the service was up all along.
+KARABINER_AGENTS="$(launchctl list 2>/dev/null || true)"
+if grep -qiE 'karabiner[-_]console[-_]user[-_]server' <<<"$KARABINER_AGENTS"; then
   log "Karabiner already running (Caps Lock -> Super)"
 else
   log "Starting Karabiner-Elements (approve its driver extension, then quit the app)"
