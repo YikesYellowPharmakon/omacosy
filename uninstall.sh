@@ -193,7 +193,7 @@ fi
 
 # theme-set / theme-next out of ~/.local/bin — only when they are OUR
 # symlinks (a user's own script of the same name survives)
-for t in theme-set theme-next theme-bg-next theme-pick omacosy-ws omacosy-ws-land omacosy-arrange omacosy-overview omacosy-toggle omacosy-focus-guard omacosy-exit-native-fs omacosy-ws-collapse omacosy-float omacosy-arrange omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-wm-switch omacosy-karabiner-omniwm; do
+for t in theme-set theme-next theme-bg-next theme-pick omacosy-ws omacosy-ws-land omacosy-overview omacosy-studio omacosy-activity omacosy-spotlight omacosy-toggle omacosy-focus-guard omacosy-exit-native-fs omacosy-ws-collapse omacosy-float omacosy-arrange omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-wm-switch omacosy-karabiner-omniwm; do
   target="$(readlink "$HOME/.local/bin/$t" 2>/dev/null || true)"
   case "$target" in *omacosy*) rm -f "$HOME/.local/bin/$t" ;; esac
 done
@@ -259,6 +259,8 @@ Done. Left in place on purpose:
   - Claude desktop's caps-lock dictation shortcut was removed during setup;
     re-enable it in Claude's settings if you used it.
   - If AeroSpace still appears in System Settings -> General -> Login Items, remove it there.
+  - ~/.config/omniwm holds OmniWM's own settings, seeded from this repo and
+    rewritten by OmniWM since; delete it if you do not use OmniWM.
   - OmniWM.app is a brew cask like the rest: removed above only when the
     manifest says omacosy installed it; one that predates omacosy stays.
   - Permission entries (Accessibility, Input Monitoring, Screen Recording,

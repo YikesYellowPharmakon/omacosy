@@ -12,6 +12,14 @@ HERDR=/opt/homebrew/bin/herdr
 SESSION="ghostty-$$"
 LOG="/tmp/omacosy-studio.log"
 
+# Ghostty runs this for EVERY window. Without Herdr the last line fails at
+# once and the window closes before anything can be read: no terminal at
+# all on a machine where Herdr is not installed. A plain login shell there.
+if [[ ! -x "$HERDR" ]]; then
+  cd "$HOME" 2>/dev/null
+  exec "${SHELL:-/bin/zsh}" -l
+fi
+
 stop_session() {
   trap - EXIT HUP TERM INT
   "$HERDR" session stop "$SESSION" >/dev/null 2>&1 || true

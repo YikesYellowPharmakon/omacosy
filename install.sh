@@ -533,6 +533,13 @@ link "$REPO_DIR/bin/omacosy-float" "$HOME/.local/bin/omacosy-float"
 link "$REPO_DIR/bin/omacosy-arrange" "$HOME/.local/bin/omacosy-arrange"
 link "$REPO_DIR/bin/omacosy-cycle" "$HOME/.local/bin/omacosy-cycle"
 link "$REPO_DIR/bin/omacosy-pkd-guard" "$HOME/.local/bin/omacosy-pkd-guard"
+# Three more that things point at by this path and nothing linked: the
+# launcher chord in aerospace.toml (a dead key without it), the command
+# in config/ghostty/config (a terminal that cannot start without it) and
+# the bar's activity pill.
+link "$REPO_DIR/bin/omacosy-spotlight" "$HOME/.local/bin/omacosy-spotlight"
+link "$REPO_DIR/bin/omacosy-studio" "$HOME/.local/bin/omacosy-studio"
+link "$REPO_DIR/bin/omacosy-activity" "$HOME/.local/bin/omacosy-activity"
 
 cat > "$HOME/Library/LaunchAgents/com.omacosy.pkd-guard.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
