@@ -19,7 +19,7 @@ PACK = REPO / "bin" / "theme-pack.py"
 CACHE = Path.home() / ".local" / "cache" / "omacosy"
 OFFICIAL = "https://github.com/omacom/omarchy.git"
 CATALOG = "https://raw.githubusercontent.com/limehawk/omarchy-theme-website/main/src/data/themes-data.json"
-THEMES_MD = Path("/Users/ye/Desktop/themes.md")
+THEMES_MD = Path.home() / "Desktop" / "themes.md"
 EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
 FAKE = re.compile(
     r"(preview|unlock|screenshot|screenie|^theme\.png$|palette|omarchy-icon|readme|waybar|neofetch)",

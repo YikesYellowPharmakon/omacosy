@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import colorsys
 import json
+import os
 import plistlib
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -80,15 +82,6 @@ def hex_to_rgb(value: str) -> tuple[int, int, int]:
 def luminance(value: str) -> float:
     r, g, b = hex_to_rgb(value)
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
-
-
-def mix_hex(a: str, b: str, t: float) -> str:
-    ra, ga, ba = hex_to_rgb(a)
-    rb, gb, bb = hex_to_rgb(b)
-    r = max(0, min(255, int(round(ra + (rb - ra) * t))))
-    g = max(0, min(255, int(round(ga + (gb - ga) * t))))
-    bl = max(0, min(255, int(round(ba + (bb - ba) * t))))
-    return f"#{r:02x}{g:02x}{bl:02x}"
 
 
 def color_distance(a: str, b: str) -> float:
@@ -2852,6 +2845,70 @@ def refresh_cached_chrome() -> None:
         )
 
 
+def _pid_runs(pid: str, name: str) -> bool:
+    """Whether that pid is a process whose executable name starts with `name`."""
+    out = subprocess.run(
+        ["/bin/ps", "-p", pid, "-o", "comm="], check=False, capture_output=True, text=True
+    ).stdout.strip()
+    return bool(out) and Path(out).name.startswith(name)
+
+
+GHOSTTY_RELOAD_CACHE = Path.home() / ".local/state/omacosy/ghostty-reload"
+
+
+def _ghostty_reloads_on_usr2(binary: Path) -> bool:
+    """Whether this Ghostty build reloads its config on SIGUSR2.
+
+    A build without the handler takes the signal's default action, which
+    ends the process and every terminal in it. So the answer comes from
+    the binary itself, and is remembered until the binary changes.
+    """
+    try:
+        st = binary.stat()
+    except OSError:
+        return False
+    stamp = f"{binary} {st.st_size} {st.st_mtime_ns}"
+    try:
+        cached = GHOSTTY_RELOAD_CACHE.read_text(encoding="utf-8").splitlines()
+        if len(cached) == 2 and cached[0] == stamp:
+            return cached[1] == "yes"
+    except OSError:
+        pass
+    try:
+        handled = b"in response to SIGUSR2" in binary.read_bytes()
+    except OSError:
+        return False
+    try:
+        GHOSTTY_RELOAD_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        GHOSTTY_RELOAD_CACHE.write_text(f"{stamp}\n{'yes' if handled else 'no'}\n", encoding="utf-8")
+    except OSError:
+        pass
+    return handled
+
+
+def reload_ghostty() -> None:
+    """Have every running Ghostty re-read its config.
+
+    This used to run `ghostty +reload-config`. That is not an action:
+    Ghostty prints "invalid action" and exits 1, so open terminals kept
+    the previous theme's palette until they were restarted.
+    """
+    out = subprocess.run(
+        ["/bin/ps", "-axo", "pid=,comm="], check=False, capture_output=True, text=True
+    ).stdout
+    for line in out.splitlines():
+        pid, _, comm = line.strip().partition(" ")
+        comm = comm.strip()
+        if not pid.isdigit() or not comm.endswith("/Contents/MacOS/ghostty"):
+            continue
+        if not _ghostty_reloads_on_usr2(Path(comm)):
+            continue
+        try:
+            os.kill(int(pid), signal.SIGUSR2)
+        except OSError:
+            pass
+
+
 def apply_macos(colors: dict[str, str]) -> None:
     accent = colors["accent"]
     apple = colors.get("_apple_accent") or str(nearest_apple_accent(accent))
@@ -2887,16 +2944,20 @@ def apply_macos(colors: dict[str, str]) -> None:
     ghostty_user = Path.home() / ".config/ghostty/config"
     if ghostty_user.is_file():
         ghostty_user.touch()
-    ghostty = Path("/Applications/Ghostty.app/Contents/MacOS/ghostty")
-    if ghostty.is_file():
-        subprocess.run([str(ghostty), "+reload-config"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # The overview samples its border colour once, at startup. A theme
-    # change has to drop that process so the next swipe reads the new one.
+    reload_ghostty()
+    # An overview built before it learnt to re-read the theme samples its
+    # border colour once, at startup. Dropping it makes the next swipe
+    # start one that reads the new colour. The pid file outlives a reboot
+    # and the number is handed to some other process afterwards, so the
+    # process is checked before it is signalled.
     overview_pid = Path.home() / ".local/state/omacosy/overview.pid"
     if overview_pid.is_file():
         pid = overview_pid.read_text(encoding="utf-8").strip()
-        if pid.isdigit():
-            subprocess.run(["kill", pid], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if pid.isdigit() and _pid_runs(pid, "omacosy-overview"):
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except OSError:
+                pass
     sync_global_preferences()
     post_chrome_notifications(appearance=appearance_changed)
     flush_distributed_notifications()
