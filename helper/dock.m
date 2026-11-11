@@ -912,6 +912,7 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
     NSColor *_fill, *_accent, *_muted;
     dispatch_source_t _themeSource;
     int _themeFD;
+    BOOL _themeMissed;
     NSMutableDictionary<NSString *, NSImage *> *_icons;
     NSMutableDictionary<NSString *, NSString *> *_bundleIDs;
     NSArray<NSString *> *_extraOrder;
@@ -1001,13 +1002,26 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
 
 - (void)watchTheme {
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".config/omarchy/current"];
-    _themeFD = open(path.fileSystemRepresentation, O_EVTONLY);
-    if (_themeFD < 0) return;
-    _themeSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, _themeFD,
-                                          DISPATCH_VNODE_WRITE | DISPATCH_VNODE_ATTRIB | DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME,
-                                          dispatch_get_main_queue());
     __weak DockController *weakSelf = self;
-    dispatch_source_set_event_handler(_themeSource, ^{
+    int fd = open(path.fileSystemRepresentation, O_EVTONLY);
+    if (fd < 0) {
+        // Not there yet: a fresh install starts the dock before the first
+        // theme is applied. Giving up here left the dock on its first
+        // palette until it was restarted, so keep knocking, and read the
+        // palette again once the watch is on — the theme may have landed
+        // in between.
+        _themeMissed = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf watchTheme];
+        });
+        return;
+    }
+    _themeFD = fd;
+    dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, fd,
+                                                      DISPATCH_VNODE_WRITE | DISPATCH_VNODE_ATTRIB | DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME,
+                                                      dispatch_get_main_queue());
+    _themeSource = source;
+    dispatch_source_set_event_handler(source, ^{
         DockController *self_ = weakSelf;
         if (!self_) return;
         [self_ loadPalette];
@@ -1016,17 +1030,24 @@ static void collectTabs(AXUIElementRef element, int depth, BOOL inTabs, NSMutabl
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [weakSelf refreshGhosttyIcon];
         });
-        if (dispatch_source_get_data(self_->_themeSource) & (DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME)) {
-            dispatch_source_cancel(self_->_themeSource);
-            close(self_->_themeFD);
-            self_->_themeFD = -1;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [self_ watchTheme];
-            });
+        if (dispatch_source_get_data(source) & (DISPATCH_VNODE_DELETE | DISPATCH_VNODE_RENAME)) {
+            dispatch_source_cancel(source);
         }
     });
-    dispatch_source_set_cancel_handler(_themeSource, ^{});
-    dispatch_resume(_themeSource);
+    // The descriptor is closed here, once the source has let go of it,
+    // rather than straight after the cancel while it may still be in use.
+    dispatch_source_set_cancel_handler(source, ^{
+        close(fd);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf watchTheme];
+        });
+    });
+    dispatch_resume(source);
+    if (_themeMissed) {
+        _themeMissed = NO;
+        [self loadPalette];
+        [self refreshGhosttyIcon];
+    }
 }
 
 - (void)buildDock {
@@ -2212,7 +2233,15 @@ end tell\n", path, path, name, indexPath];
         return;
     }
     AXUIElementRef at = menu;
+    // Which step is the last one is counted, not read off the object. The
+    // old test was `index != pick.indexes.lastObject`, a pointer compare,
+    // and small NSNumbers are tagged pointers: equal values ARE the same
+    // pointer. A path like 2.2 (Options > Show in Finder, when Options is
+    // the third item) took its first step for the last, never opened the
+    // submenu, and the click did nothing.
+    NSUInteger steps = pick.indexes.count, step = 0;
     for (NSNumber *index in pick.indexes) {
+        BOOL lastStep = ++step == steps;
         if (!at) break;
         CFTypeRef kids = NULL;
         AXUIElementRef next = NULL;
@@ -2232,7 +2261,7 @@ end tell\n", path, path, name, indexPath];
         }
         if (at && at != menu) CFRelease(at);
         at = next;
-        if (index != pick.indexes.lastObject) {
+        if (!lastStep) {
             AXUIElementRef sub = [self menuChildOf:at];
             [self parkMenuOffscreen:sub];
             if (at && at != menu) CFRelease(at);

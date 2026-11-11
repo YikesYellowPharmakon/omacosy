@@ -82,10 +82,22 @@ let showOnLaunch = CommandLine.arguments.contains("--show")
 
 let isClose = CommandLine.arguments.contains("close")
 
+// The pid file sits in the state dir so that it survives the /tmp purge,
+// which means it survives a reboot as well, and after one the number in it
+// belongs to whatever process was handed it next. SIGUSR1's default action
+// is to end the process: the first swipe after a reboot could kill a
+// stranger instead of opening the overview. So the pid has to still be an
+// overview before it is signalled.
+func isOverview(_ pid: pid_t) -> Bool {
+    var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+    guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return false }
+    return URL(fileURLWithPath: String(cString: path)).lastPathComponent.hasPrefix("omacosy-overview")
+}
+
 if !isDaemon {
     if let old = try? String(contentsOfFile: pidPath, encoding: .utf8),
         let pid = pid_t(old.trimmingCharacters(in: .whitespacesAndNewlines)),
-        kill(pid, 0) == 0 {
+        pid > 1, isOverview(pid) {
         kill(pid, isClose ? SIGUSR2 : SIGUSR1) // close / toggle
         exit(0)
     }
@@ -105,7 +117,10 @@ if !isDaemon {
 if let out = try? { () -> String in
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-    p.arguments = ["-f", "omacosy-overview --daemon"]
+    // install.sh builds this as omacosy-overview.bin behind a wrapper
+    // script; "omacosy-overview --daemon" alone never matched that name
+    // and an older daemon was left running beside the new one.
+    p.arguments = ["-f", "omacosy-overview(\\.bin)? --daemon"]
     let pipe = Pipe()
     p.standardOutput = pipe
     try p.run()

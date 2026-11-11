@@ -699,9 +699,22 @@ func shell2(_ launch: String, _ args: [String]) -> (out: String, err: String, st
     p.standardOutput = outPipe
     p.standardError = errPipe
     guard (try? p.run()) != nil else { return ("", "spawn failed", -1) }
-    let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    // The two pipes are drained at the same time. Reading stdout to its
+    // end first leaves stderr unread until the child exits, and a child
+    // that writes more than a pipe holds (64 KB) to stderr then blocks
+    // forever with stdout still open — and this thread with it.
+    var errData = Data()
+    let errDone = DispatchGroup()
+    errDone.enter()
+    DispatchQueue.global(qos: .utility).async {
+        errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        errDone.leave()
+    }
+    let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+    errDone.wait()
     p.waitUntilExit()
+    let out = String(data: outData, encoding: .utf8) ?? ""
+    let err = String(data: errData, encoding: .utf8) ?? ""
     return (out.trimmingCharacters(in: .whitespacesAndNewlines),
             err.trimmingCharacters(in: .whitespacesAndNewlines),
             p.terminationStatus)

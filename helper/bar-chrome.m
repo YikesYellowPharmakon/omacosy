@@ -114,11 +114,17 @@ static BOOL widIsTiled(uint32_t wid) {
     task.arguments = @[@"list-windows", @"--all", @"--format", @"%{window-id} %{window-layout}"];
     NSPipe *pipe = [NSPipe pipe];
     task.standardOutput = pipe;
-    task.standardError = [NSPipe pipe];
+    // Nobody reads stderr, so it goes nowhere rather than into a pipe that
+    // would stop the child once 64 KB had piled up in it.
+    task.standardError = NSFileHandle.fileHandleWithNullDevice;
     if (![task launchAndReturnError:nil]) return YES;
+    // Read to the end BEFORE waiting. Waiting first never returns once the
+    // window list outgrows the pipe: the child blocks writing, and this
+    // blocks on the child.
+    NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
     [task waitUntilExit];
     if (task.terminationStatus != 0) return YES;
-    NSString *out = [[NSString alloc] initWithData:[pipe.fileHandleForReading readDataToEndOfFile] encoding:NSUTF8StringEncoding];
+    NSString *out = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     NSString *prefix = [NSString stringWithFormat:@"%u ", wid];
     for (NSString *line in [out componentsSeparatedByString:@"\n"]) {
         if (![line hasPrefix:prefix]) continue;
@@ -324,7 +330,7 @@ static BOOL aerospaceListsScreen(NSScreen *screen) {
     task.arguments = @[@"list-monitors", @"--format", @"%{monitor-name}"];
     NSPipe *pipe = [NSPipe pipe];
     task.standardOutput = pipe;
-    task.standardError = [NSPipe pipe];
+    task.standardError = NSFileHandle.fileHandleWithNullDevice;
     if (![task launchAndReturnError:nil]) return NO;
     NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
     [task waitUntilExit];
@@ -383,8 +389,8 @@ static void kickBar(NSString *why) {
     NSTask *task = [NSTask new];
     task.executableURL = [NSURL fileURLWithPath:@"/bin/launchctl"];
     task.arguments = @[@"kickstart", @"-k", [NSString stringWithFormat:@"gui/%u/com.omacosy.bar", getuid()]];
-    task.standardOutput = [NSPipe pipe];
-    task.standardError = [NSPipe pipe];
+    task.standardOutput = NSFileHandle.fileHandleWithNullDevice;
+    task.standardError = NSFileHandle.fileHandleWithNullDevice;
     if (![task launchAndReturnError:nil]) return;
     [task waitUntilExit];
     [barKicks addObject:[NSDate date]];
