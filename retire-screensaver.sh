@@ -6,8 +6,9 @@
 # this repo no longer builds. This takes all of that off and hands the
 # screen saver back to macOS.
 #
-# install.sh and uninstall.sh both run it. Idempotent: on a machine that
-# never had the screensavers every step finds nothing to do.
+# install.sh and uninstall.sh both run it. Idempotent, and on a machine
+# that never had the screensavers every step finds nothing to do: no
+# setting is touched unless one of the pieces above was actually there.
 #
 #   OMACOSY_TRASH=<dir>   move files there instead of deleting them
 #
@@ -20,7 +21,6 @@ STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omacosy"
 AGENTS="$HOME/Library/LaunchAgents"
 BIN="$HOME/.local/bin"
 SAVERS="$HOME/Library/Screen Savers"
-MARKER="$STATE/screensaver-retired"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
@@ -58,8 +58,10 @@ done
 # reused, so the process is checked before it is signalled.
 if [ -f "$STATE/ss-caffeinate.pid" ]; then
   pid="$(tr -cd '0-9' < "$STATE/ss-caffeinate.pid")"
-  if [ -n "$pid" ] && [ "$(ps -p "$pid" -o comm= 2>/dev/null)" = "/usr/bin/caffeinate" ]; then
-    kill "$pid" 2>/dev/null || true
+  if [ -n "$pid" ]; then
+    case "$(ps -p "$pid" -o comm= 2>/dev/null)" in
+      caffeinate | */caffeinate) kill "$pid" 2>/dev/null || true ;;
+    esac
   fi
 fi
 pkill -f '/omacosy-screensaver-idle$' 2>/dev/null && found=1
@@ -151,19 +153,17 @@ esac
 # The start delay was forced on every theme switch: 0 (never) so the
 # system saver could not race the Ghostty one, 180 under Enter the Matrix.
 # Those two values are indistinguishable from a choice made in System
-# Settings, so they are cleared ONCE per machine and the marker keeps a
-# later re-run of install.sh from undoing a delay the user has set since.
-if [ ! -e "$MARKER" ]; then
+# Settings, so they are cleared only on a run that found screensaver
+# pieces to retire. A Mac that never had them keeps a "Never" its owner
+# set, and so does this one on every run after the first.
+if [ "$found" = 1 ]; then
   idle="$(defaults -currentHost read "$DOMAIN" idleTime 2>/dev/null || true)"
   case "$idle" in
-    0 | 180)
-      found=1
-      defaults -currentHost delete "$DOMAIN" idleTime >/dev/null 2>&1 || true
-      ;;
+    0 | 180) defaults -currentHost delete "$DOMAIN" idleTime >/dev/null 2>&1 || true ;;
   esac
-  mkdir -p "$STATE"
-  : > "$MARKER"
 fi
+# the once-per-machine marker an earlier version of this script left
+rm -f "$STATE/screensaver-retired"
 
 if [ "$found" = 1 ]; then
   log "Retired the screensavers and their idle watcher; the screen saver is macOS's again."
