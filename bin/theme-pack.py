@@ -1425,7 +1425,9 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
     # read as a block taller than the line above it, so the fill is off
     # ("reset") and the name, like the rule, is one soft mid tone.
     # ui.accent below keeps the theme's own accent.
-    soft = mix_hex(bg, fg, 0.42)
+    # Low enough that the rule all but disappears; the tab name repeats
+    # what the sidebar and status strip already say, so it can be quiet.
+    soft = mix_hex(bg, fg, 0.24)
     # Blocked is the theme's red, unless the accent (working) is that red
     # already, as in No Bad Memories; then its yellow.
     blocked = ink[1] if color_distance(ink[1], accent) >= 40 else ink[3]
@@ -1461,6 +1463,7 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
         f'overlay1 = "{mix_hex(fg, bg, 0.40)}"\n'
         # No sidebar slab: its full-height block never lined up with the
         # pane frame, which is drawn through the middle of its edge cells.
+        # (A faint slab does not stop Herdr drawing the edge rule either.)
         'sidebar_bg = "reset"\n'
         'panel_bg = "reset"\n'
         f'active_row_bg = "{active}"\n'
