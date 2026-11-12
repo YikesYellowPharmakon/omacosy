@@ -75,6 +75,12 @@ import json, os, re, subprocess, sys, time
 
 herdr, session = sys.argv[1], sys.argv[2]
 SHELLS = {"zsh", "bash", "fish", "sh", "dash", "ksh", "nu"}
+# Agents Herdr tracks itself through its own integrations. It refuses an
+# agent report from another source for them, so a claim this watcher made
+# earlier (zsh, before the agent started) stuck in the sidebar. For these
+# the claim is released and the integration's own report shows instead.
+NATIVE = {"claude", "codex", "pi", "omp", "copilot", "devin", "droid",
+          "kimi", "opencode", "kilo"}
 seen = {}
 misses = 0
 
@@ -111,7 +117,7 @@ def program(info):
     if chosen is None and procs:
         chosen = procs[0]
     if not chosen:
-        return "zsh", "idle"
+        return "zsh", "idle", ""
     argv0 = chosen.get("argv0") or chosen.get("name") or ""
     base = os.path.basename(argv0) or chosen.get("name") or "zsh"
     if base.startswith("-"):
@@ -119,10 +125,22 @@ def program(info):
     cmd = chosen.get("cmdline") or ""
     name = chosen.get("name") or ""
     if chosen.get("pid") == shell_pid or base in SHELLS:
-        return sanitize(base or "zsh"), "idle"
+        return sanitize(base or "zsh"), "idle", ""
     if name == "Python" or "Python.app" in cmd or "Python.framework" in cmd:
-        return "python3", "working"
-    return sanitize(base), "working"
+        return "python3", "working", short_cmd(cmd)
+    return sanitize(base), "working", short_cmd(cmd)
+
+def short_cmd(cmd):
+    """The command line the sidebar shows under a busy pane: program name
+    without its path, the rest as typed, cut to fit the sidebar."""
+    words = (cmd or "").split()
+    if not words:
+        return ""
+    words[0] = os.path.basename(words[0])
+    if words[0].lower().startswith("python") and len(words) > 1:
+        words = ["python3"] + [os.path.basename(words[1])] + words[2:]
+    text = " ".join(words)
+    return text if len(text) <= 22 else text[:21] + "…"
 
 while True:
     data = call("pane", "list")
@@ -143,14 +161,25 @@ while True:
         info = call("pane", "process-info", "--pane", pane_id)
         if not info:
             continue
-        label, state = program(info)
-        if seen.get(pane_id) == (label, state):
+        label, state, running = program(info)
+        if seen.get(pane_id) == (label, state, running):
             continue
         subprocess.run(
             [herdr, "--session", session, "pane", "rename", pane_id, label],
             capture_output=True,
             text=True,
         )
+        if label in NATIVE:
+            before = seen.get(pane_id)
+            if before and before[0] not in NATIVE:
+                subprocess.run(
+                    [herdr, "--session", session, "pane", "release-agent", pane_id,
+                     "--source", "omacosy", "--agent", before[0]],
+                    capture_output=True,
+                    text=True,
+                )
+            seen[pane_id] = (label, state, running)
+            continue
         reported = subprocess.run(
             [
                 herdr, "--session", session, "pane", "report-agent",
@@ -160,8 +189,16 @@ while True:
             capture_output=True,
             text=True,
         )
+        # $cmd in the sidebar (theme-pack's agent rows); idle panes clear it.
+        subprocess.run(
+            [herdr, "--session", session, "pane", "report-metadata", pane_id,
+             "--source", "omacosy",
+             *(["--token", f"cmd={running}"] if running else ["--clear-token", "cmd"])],
+            capture_output=True,
+            text=True,
+        )
         if reported.returncode == 0:
-            seen[pane_id] = (label, state)
+            seen[pane_id] = (label, state, running)
     for pane_id in list(seen):
         if pane_id not in alive:
             del seen[pane_id]

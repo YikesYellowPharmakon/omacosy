@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# One line for the right end of Herdr's tab row (ui.tab_bar_right, set by
+# theme-pack): the active theme, the focused pane's git branch with a
+# mark when it has changes, and the 5-minute load average.
+#
+#   ◆ no-bad-memories ╱ ⎇ main* ╱ ▲ 1.82
+#
+# Herdr runs it every few seconds per window and keeps only the last line
+# of output, so it stays cheap and prints nothing it does not know.
+set -uo pipefail
+
+parts=()
+
+theme="$(readlink "$HOME/.config/omarchy/current/theme" 2>/dev/null || true)"
+[ -n "$theme" ] && parts+=("◆ ${theme##*/}")
+
+cwd="${HERDR_ACTIVE_PANE_CWD:-$PWD}"
+if branch="$(git -C "$cwd" symbolic-ref --quiet --short HEAD 2>/dev/null)"; then
+  dirty=""
+  if [ -n "$(git -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null | head -n 1)" ]; then
+    dirty="*"
+  fi
+  parts+=("⎇ ${branch}${dirty}")
+fi
+
+# "{ 1.82 1.70 1.60 }": after the brace come the 1-, 5- and 15-minute
+# averages, so the 5-minute one is awk's third field.
+load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $3}')"
+[ -n "$load" ] && parts+=("▲ ${load}")
+
+out=""
+for p in "${parts[@]}"; do
+  out="${out:+$out ╱ }$p"
+done
+printf '%s\n' "$out"
