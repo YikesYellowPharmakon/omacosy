@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # One line for the right end of Herdr's tab row (ui.tab_bar_right, set by
-# theme-pack): the active tab's name, the focused pane's git branch with a
-# mark when it has changes, and the 5-minute load average.
+# theme-pack): the focused pane's git branch with a mark when it has
+# changes, and the 5-minute load average.
 #
-#   ▸ 01 claude ╱ ⎇ herdr-hud* ╱ ▲ 1.8
+#   ⎇ herdr-hud* ╱ ▲ 1.8
 #
 # Herdr runs it every few seconds per window and keeps only the last line
 # of output, so it stays cheap and prints nothing it does not know.
@@ -13,15 +13,6 @@
 set -uo pipefail
 
 parts=()
-
-# The active tab's own name is drawn in the same color as the sidebar's
-# edge rule (surface_dim), which theme-pack hides, so the name is shown
-# here instead. Herdr runs this with the active tab and its socket set.
-if [ -n "${HERDR_ACTIVE_TAB_ID:-}" ]; then
-  tab="$("${HERDR_BIN_PATH:-herdr}" tab get "$HERDR_ACTIVE_TAB_ID" 2>/dev/null |
-    sed -n 's/.*"label":"\([^"]*\)".*/\1/p')"
-  [ -n "$tab" ] && parts+=("▸ $tab")
-fi
 
 cwd="${HERDR_ACTIVE_PANE_CWD:-$PWD}"
 if branch="$(git -C "$cwd" symbolic-ref --quiet --short HEAD 2>/dev/null)"; then

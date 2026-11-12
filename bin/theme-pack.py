@@ -1421,14 +1421,18 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
     active = mix_hex(bg, accent, 0.38)
     status_cmd = Path(__file__).resolve().parent / "omacosy-herdr-status"
     # The active tab is filled with theme.custom.accent and named in
-    # surface_dim, which also draws the sidebar's edge rule. A filled tab
-    # read as a block taller than the line above it, so the fill is off
-    # ("reset") and the name, like the rule, is one soft mid tone.
-    # ui.accent below keeps the theme's own accent.
-    # The rule is not wanted at all, so it takes the background color. The
-    # active tab's name goes with it; the sidebar and the status strip
-    # already say what the tab runs.
+    # surface_dim, which also draws the sidebar's edge rule. The rule is
+    # not wanted, so surface_dim is the background color, and the tab is a
+    # filled chip with its name in that dark color. Lighten the fill toward
+    # the text color until the dark name reads. ui.accent below keeps the
+    # theme's own accent.
     soft = bg
+    tab_fill = accent
+    for _ in range(12):
+        hi, lo = sorted((luminance(bg), luminance(tab_fill)), reverse=True)
+        if (hi + 0.05) / (lo + 0.05) >= 3.0:
+            break
+        tab_fill = mix_hex(tab_fill, fg, 0.15)
     # Blocked is the theme's red, unless the accent (working) is that red
     # already, as in No Bad Memories; then its yellow.
     blocked = ink[1] if color_distance(ink[1], accent) >= 40 else ink[3]
@@ -1449,7 +1453,7 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
         "[theme.custom]\n"
         f'text = "{fg}"\n'
         f'subtext0 = "{comment_ink(colors)}"\n'
-        'accent = "reset"\n'
+        f'accent = "{tab_fill}"\n'
         f'red = "{c1}"\n'
         f'green = "{c2}"\n'
         f'yellow = "{c3}"\n'
@@ -1472,7 +1476,9 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
         "\n"
         "[ui]\n"
         # Full bleed: no frames or gaps between panes, the sidebar hidden
-        # until prefix+b, and the tab row at the bottom as a status strip.
+        # until prefix+b, and the tab row at the top as a status strip. At
+        # the bottom the filled tab chip sat right under the agent's own
+        # status line and looked taller than it.
         'pane_borders = "off"\n'
         "pane_outer_borders = false\n"
         "pane_gaps = false\n"
@@ -1480,7 +1486,7 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
         'status_indicators = "symbols"\n'
         f'accent = "{accent}"\n'
         "hide_tab_bar_when_single_tab = false\n"
-        'tab_bar_position = "bottom"\n'
+        'tab_bar_position = "top"\n'
         "tab_bar_right = [\n"
         '  { type = "zoom" },\n'
         f'  {{ type = "command", command = "{status_cmd}", interval_seconds = 3, timeout_seconds = 2 }},\n'
