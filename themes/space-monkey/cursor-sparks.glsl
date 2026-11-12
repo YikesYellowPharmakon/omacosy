@@ -1,22 +1,25 @@
 // Original shader by yakovgal on Shadertoy:
 // https://www.shadertoy.com/user/yakovgal
-// Palette variant: every spark carries one of this theme's four colors and
+// Palette variant: every spark carries one of six of this theme's colors and
 // drifts through the others, like the No Bad Memories rainbow sparks.
 // theme-pack.py fills the colors in.
 
 const vec3 blue_shift = vec3(1.0, 1.0, 1.0);
 
-const vec3 PALETTE[4] = vec3[4](
-        vec3(0.7412, 0.2863, 0.1412), // omacosy-palette-0
-        vec3(0.8745, 0.4706, 0.1765), // omacosy-palette-1
-        vec3(0.9765, 0.8000, 0.4235), // omacosy-palette-2
-        vec3(0.9922, 0.4078, 0.5137) // omacosy-palette-3
+const int PALETTE_N = 6;
+const vec3 PALETTE[6] = vec3[6](
+        vec3(0.9922, 0.4078, 0.5137), // omacosy-palette-0
+        vec3(0.7412, 0.2863, 0.1412), // omacosy-palette-1
+        vec3(0.8745, 0.4706, 0.1765), // omacosy-palette-2
+        vec3(0.9765, 0.8000, 0.4235), // omacosy-palette-3
+        vec3(0.7843, 0.8863, 0.5725), // omacosy-palette-4
+        vec3(0.9725, 0.6549, 0.5333) // omacosy-palette-5
     );
 
 vec3 paletteAt(float h) {
-    float x = fract(h) * 4.0;
+    float x = fract(h) * float(PALETTE_N);
     int i = int(x);
-    return mix(PALETTE[i], PALETTE[(i + 1) % 4], smoothstep(0.0, 1.0, fract(x)));
+    return mix(PALETTE[i], PALETTE[(i + 1) % PALETTE_N], smoothstep(0.0, 1.0, fract(x)));
 }
 
 uint pcg(uint v)

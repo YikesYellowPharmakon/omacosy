@@ -83,8 +83,25 @@ vec2 screenExit(vec2 from, vec2 dir) {
     return from + d * max(min(tx, ty), 0.0);
 }
 
-const vec4 TRAIL_COLOR = vec4(0.0196, 0.6784, 0.8039, 1.0); // omacosy-body
-const vec4 TRAIL_COLOR_ACCENT = vec4(0.6588, 0.1725, 0.7216, 1.0); // omacosy-edge
+// The band flows through these from cursor to tail; the halo runs a
+// third of the loop ahead, so core and outline are never one flat color.
+// theme-pack.py fills them in.
+const int PALETTE_N = 6;
+const vec3 PALETTE[6] = vec3[6](
+        vec3(0.6588, 0.1725, 0.7216), // omacosy-palette-0
+        vec3(0.7804, 0.1569, 0.7216), // omacosy-palette-1
+        vec3(0.8784, 0.2902, 0.5490), // omacosy-palette-2
+        vec3(1.0000, 0.3529, 0.2902), // omacosy-palette-3
+        vec3(0.8980, 0.1569, 0.1020), // omacosy-palette-4
+        vec3(0.8980, 0.5451, 0.2588) // omacosy-palette-5
+    );
+
+vec3 paletteAt(float h) {
+    float x = fract(h) * float(PALETTE_N);
+    int i = int(x);
+    return mix(PALETTE[i], PALETTE[(i + 1) % PALETTE_N], smoothstep(0.0, 1.0, fract(x)));
+}
+
 const float DURATION = 0.42; //IN SECONDS
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
@@ -146,9 +163,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     float edge = 0.008;
     float halo = 1.0 - smoothstep(0.0, edge, band);
     float core = 1.0 - smoothstep(0.0, edge * 0.45, band);
-    vec4 trail = mix(fragColor, TRAIL_COLOR_ACCENT, halo * 0.8);
-    trail = mix(trail, TRAIL_COLOR, core);
+    float along = clamp(distance(vu, centerCC) / max(lineLength, 1e-4), 0.0, 1.0);
+    float h = along * 0.9 - iTime * 0.6;
+    vec4 bodyColor = vec4(paletteAt(h), 1.0);
+    vec4 haloColor = vec4(paletteAt(h + 0.33), 1.0);
+    vec4 trail = mix(fragColor, haloColor, halo * 0.8);
+    trail = mix(trail, bodyColor, core);
     float cursorGlow = 1.0 - smoothstep(0.0, 0.004, sdfCurrentCursor);
-    trail = mix(trail, TRAIL_COLOR, cursorGlow * 0.55);
+    trail = mix(trail, bodyColor, cursorGlow * 0.55);
     fragColor = mix(trail, fragColor, 1. - smoothstep(0., sdfCurrentCursor, easedProgress * lineLength));
 }

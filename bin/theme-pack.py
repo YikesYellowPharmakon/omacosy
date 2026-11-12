@@ -1748,19 +1748,42 @@ CURSOR_LAYER_SWAPS = {
 # Per theme, a halo color per layer in place of the darker body color.
 CURSOR_EDGES = {
     "no-bad-memories": {
-        "cursor_frozen.glsl": "#A82CB8",
         "cursor_blaze_tapered.glsl": "#E5281A",
     },
 }
+
+# The six colors a theme's trails flow through, in loop order. Each theme's
+# own colors, picked for the widest spread of hue and lightness it has, so
+# the flow reads like No Bad Memories' rainbow without leaving the theme.
+# No Bad Memories' smear and sparks keep the real rainbow; this list is for
+# its frozen band, which stays in the red-magenta-purple of its accent.
+CURSOR_PALETTES = {
+    "azure": ("#5656bd", "#6868e6", "#8da1c8", "#add8f5", "#76bbee", "#5693c4"),
+    "enter-the-matrix": ("#44b83a", "#7bae4e", "#a8be5a", "#a8c6ae", "#7cbca0", "#4caf7e"),
+    "snow-black": ("#a06666", "#dd9999", "#ffffff", "#c1c1c1", "#87abab", "#5f8787"),
+    "space-monkey": ("#fd6883", "#bd4924", "#df782d", "#f9cc6c", "#c8e292", "#f8a788"),
+    "no-bad-memories": ("#a82cb8", "#c728b8", "#e04a8c", "#ff5a4a", "#e5281a", "#e58b42"),
+}
+
+
+def _cursor_palette(theme: str, roles: dict[str, str]) -> tuple[str, ...]:
+    """Six colors for the flowing layers; a theme without a list gets its
+    four syntax colors plus a lighter and a darker keyword, ordered by hue."""
+    named = CURSOR_PALETTES.get(theme)
+    if named:
+        return named
+    base = [roles["keyword"], roles["string"], roles["type"], roles["function"]]
+    base.sort(key=lambda h: _hsv_of(h)[0])
+    return (*base, mix_hex(roles["keyword"], "#ffffff", 0.35), _scale_hex(roles["keyword"], 0.7))
 
 
 def write_cursor_stack(theme_dir: Path, colors: dict[str, str]) -> list[Path]:
     """Four playground shaders, tinted with this theme's colors.
 
     Bottom to top: frozen, tapered blaze, smear, sparks.
-    Frozen and blaze each take one color, the theme's own function and
-    string. Smear and sparks flow through all four (keyword, string, type,
-    function) the way No Bad Memories' rainbow flows through every hue.
+    Blaze takes one color, the theme's own string. Frozen, smear and sparks
+    flow through the six colors of _cursor_palette the way No Bad Memories'
+    rainbow flows through every hue.
     A long cursor jump extends those trails to the screen edge.
     CURSOR_LAYER_SWAPS can replace a layer for one theme.
     """
@@ -1769,9 +1792,9 @@ def write_cursor_stack(theme_dir: Path, colors: dict[str, str]) -> list[Path]:
     paths: list[Path] = []
     swaps = CURSOR_LAYER_SWAPS.get(theme_dir.name, {})
     edges = CURSOR_EDGES.get(theme_dir.name, {})
-    palette = (roles["keyword"], roles["string"], roles["type"], roles["function"])
+    palette = _cursor_palette(theme_dir.name, roles)
     layers = (
-        ("cursor_frozen.glsl", "cursor-frozen.glsl", roles["function"]),
+        ("cursor_frozen.glsl", "cursor-frozen.glsl", None),
         ("cursor_blaze_tapered.glsl", "cursor-blaze-tapered.glsl", roles["string"]),
         ("cursor_smear_palette.glsl", "cursor-smear-gradient.glsl", None),
         ("sparks_palette.glsl", "cursor-sparks.glsl", None),

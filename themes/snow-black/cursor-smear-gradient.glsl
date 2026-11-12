@@ -3,21 +3,24 @@
 // GitHub: https://github.com/PremModhaOfficial
 //
 // Cursor trail shader that creates a hexagonal trailing effect. The colors
-// flow like the No Bad Memories rainbow, but through this theme's own four
+// flow like the No Bad Memories rainbow, but through six of this theme's own
 // colors; theme-pack.py fills them in.
 
-const vec3 PALETTE[4] = vec3[4](
+const int PALETTE_N = 6;
+const vec3 PALETTE[6] = vec3[6](
         vec3(0.6275, 0.4000, 0.4000), // omacosy-palette-0
         vec3(0.8667, 0.6000, 0.6000), // omacosy-palette-1
-        vec3(0.7569, 0.7569, 0.7569), // omacosy-palette-2
-        vec3(0.3725, 0.5294, 0.5294) // omacosy-palette-3
+        vec3(1.0000, 1.0000, 1.0000), // omacosy-palette-2
+        vec3(0.7569, 0.7569, 0.7569), // omacosy-palette-3
+        vec3(0.5294, 0.6706, 0.6706), // omacosy-palette-4
+        vec3(0.3725, 0.5294, 0.5294) // omacosy-palette-5
     );
 
 // A closed loop through the palette: h in [0, 1) goes 0 -> 1 -> 2 -> 3 -> 0.
 vec3 paletteAt(float h) {
-    float x = fract(h) * 4.0;
+    float x = fract(h) * float(PALETTE_N);
     int i = int(x);
-    return mix(PALETTE[i], PALETTE[(i + 1) % 4], smoothstep(0.0, 1.0, fract(x)));
+    return mix(PALETTE[i], PALETTE[(i + 1) % PALETTE_N], smoothstep(0.0, 1.0, fract(x)));
 }
 
 // Process each edge: compute distance and determine if point is inside
