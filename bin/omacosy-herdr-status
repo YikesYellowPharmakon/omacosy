@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
 # One line for the right end of Herdr's tab row (ui.tab_bar_right, set by
-# theme-pack): the active theme, the focused pane's git branch with a
+# theme-pack): the active tab's name, the focused pane's git branch with a
 # mark when it has changes, and the 5-minute load average.
 #
-#   ◆ no-bad-memories ╱ ⎇ main* ╱ ▲ 1.82
+#   ▸ 01 claude ╱ ⎇ herdr-hud* ╱ ▲ 1.8
 #
 # Herdr runs it every few seconds per window and keeps only the last line
 # of output, so it stays cheap and prints nothing it does not know.
+# Herdr hides the whole status area when it does not fit beside the tabs,
+# so the line is kept short: no theme name (the colors say it), the last
+# part of the branch name only, one decimal of load.
 set -uo pipefail
 
 parts=()
 
-theme="$(readlink "$HOME/.config/omarchy/current/theme" 2>/dev/null || true)"
-[ -n "$theme" ] && parts+=("◆ ${theme##*/}")
+# The active tab's own name is drawn in the same color as the sidebar's
+# edge rule (surface_dim), which theme-pack hides, so the name is shown
+# here instead. Herdr runs this with the active tab and its socket set.
+if [ -n "${HERDR_ACTIVE_TAB_ID:-}" ]; then
+  tab="$("${HERDR_BIN_PATH:-herdr}" tab get "$HERDR_ACTIVE_TAB_ID" 2>/dev/null |
+    sed -n 's/.*"label":"\([^"]*\)".*/\1/p')"
+  [ -n "$tab" ] && parts+=("▸ $tab")
+fi
 
 cwd="${HERDR_ACTIVE_PANE_CWD:-$PWD}"
 if branch="$(git -C "$cwd" symbolic-ref --quiet --short HEAD 2>/dev/null)"; then
@@ -20,12 +29,14 @@ if branch="$(git -C "$cwd" symbolic-ref --quiet --short HEAD 2>/dev/null)"; then
   if [ -n "$(git -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null | head -n 1)" ]; then
     dirty="*"
   fi
+  branch="${branch##*/}"
+  [ "${#branch}" -gt 16 ] && branch="${branch:0:15}…"
   parts+=("⎇ ${branch}${dirty}")
 fi
 
 # "{ 1.82 1.70 1.60 }": after the brace come the 1-, 5- and 15-minute
 # averages, so the 5-minute one is awk's third field.
-load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $3}')"
+load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{printf "%.1f", $3}')"
 [ -n "$load" ] && parts+=("▲ ${load}")
 
 out=""
