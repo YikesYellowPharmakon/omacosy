@@ -1530,12 +1530,31 @@ def write_herdr(theme_dir: Path, colors: dict[str, str]) -> None:
     if check.returncode != 0:
         print(check.stdout.strip(), file=sys.stderr)
         return
-    subprocess.run(
-        [herdr, "server", "reload-config"],
+    # Every Ghostty window runs its own Herdr session (omacosy-studio).
+    # A bare reload-config reaches only the session in this process's
+    # environment, or the default one from outside Herdr, so every other
+    # window kept the old theme. Reload each running session by name.
+    for session in _herdr_running_sessions(herdr):
+        subprocess.run(
+            [herdr, "--session", session, "server", "reload-config"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+
+def _herdr_running_sessions(herdr: str) -> list[str]:
+    listed = subprocess.run(
+        [herdr, "session", "list", "--json"],
         check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
     )
+    try:
+        sessions = json.loads(listed.stdout).get("sessions") or []
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    return [s["name"] for s in sessions if s.get("running") and s.get("name")]
 
 
 def render_yazi(colors: dict[str, str]) -> str:
