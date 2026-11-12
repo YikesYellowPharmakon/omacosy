@@ -83,6 +83,7 @@ NATIVE = {"claude", "codex", "pi", "omp", "copilot", "devin", "droid",
           "kimi", "opencode", "kilo"}
 seen = {}
 misses = 0
+tab_names = {}  # tab_id -> the label this watcher last gave it
 
 def call(*args):
     run = subprocess.run(
@@ -141,6 +142,34 @@ def short_cmd(cmd):
         words = ["python3"] + [os.path.basename(words[1])] + words[2:]
     text = " ".join(words)
     return text if len(text) <= 22 else text[:21] + "…"
+
+def name_tabs(panes):
+    """Tabs are named "01 claude": their number and what their focused
+    pane runs. Only a tab still called by its bare number, or by a name
+    this watcher gave it, is renamed; a name typed by hand stays."""
+    listed = call("tab", "list")
+    if not listed:
+        return
+    running = {}
+    for pane in panes:
+        tab = pane.get("tab_id")
+        here = seen.get(pane.get("pane_id"))
+        if tab and here and (pane.get("focused") or tab not in running):
+            running[tab] = here[0]
+    for tab in listed.get("result", {}).get("tabs") or []:
+        tab_id, label = tab.get("tab_id"), tab.get("label") or ""
+        if not tab_id or tab_id not in running:
+            continue
+        if not (label.isdigit() or label == tab_names.get(tab_id)):
+            continue
+        want = f'{int(tab.get("number") or 0):02d} {running[tab_id]}'
+        if label != want:
+            subprocess.run(
+                [herdr, "--session", session, "tab", "rename", tab_id, want],
+                capture_output=True,
+                text=True,
+            )
+        tab_names[tab_id] = want
 
 while True:
     data = call("pane", "list")
@@ -202,6 +231,7 @@ while True:
     for pane_id in list(seen):
         if pane_id not in alive:
             del seen[pane_id]
+    name_tabs(panes)
     time.sleep(0.4)
 PY
 }

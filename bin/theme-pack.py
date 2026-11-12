@@ -1420,6 +1420,12 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
     overlay0 = mix_hex(bg, comment_ink(colors), 0.70)
     active = mix_hex(bg, accent, 0.38)
     status_cmd = Path(__file__).resolve().parent / "omacosy-herdr-status"
+    # The active tab is filled with theme.custom.accent and named in
+    # surface_dim, which also draws the sidebar's edge rule. A filled tab
+    # read as a block taller than the line above it, so the fill is off
+    # ("reset") and the name, like the rule, is one soft mid tone.
+    # ui.accent below keeps the theme's own accent.
+    soft = mix_hex(bg, fg, 0.42)
     # Blocked is the theme's red, unless the accent (working) is that red
     # already, as in No Bad Memories; then its yellow.
     blocked = ink[1] if color_distance(ink[1], accent) >= 40 else ink[3]
@@ -1440,7 +1446,7 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
         "[theme.custom]\n"
         f'text = "{fg}"\n'
         f'subtext0 = "{comment_ink(colors)}"\n'
-        f'accent = "{accent}"\n'
+        'accent = "reset"\n'
         f'red = "{c1}"\n'
         f'green = "{c2}"\n'
         f'yellow = "{c3}"\n'
@@ -1448,9 +1454,11 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
         f'mauve = "{c5}"\n'
         f'surface0 = "{surface0}"\n'
         f'surface1 = "{surface1}"\n'
-        f'surface_dim = "{mix_hex(bg, surface0, 0.55)}"\n'
+        # surface_dim: the sidebar's edge rule and the active tab's name.
+        f'surface_dim = "{soft}"\n'
         f'overlay0 = "{overlay0}"\n'
-        f'overlay1 = "{mix_hex(overlay0, accent, 0.25)}"\n'
+        # overlay1 is the status strip at the bottom and its "+" button.
+        f'overlay1 = "{mix_hex(fg, bg, 0.40)}"\n'
         # No sidebar slab: its full-height block never lined up with the
         # pane frame, which is drawn through the middle of its edge cells.
         'sidebar_bg = "reset"\n'
