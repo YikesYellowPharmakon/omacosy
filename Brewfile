@@ -7,6 +7,7 @@ tap "nikitabobko/tap"        # aerospace
 cask "aerospace"
 cask "karabiner-elements"  # Caps Lock -> Super
 cask "ghostty"             # default terminal + floating TUI host (btop)
+brew "herdr"               # Ghostty's command (omacosy-studio) runs every window in it
 
 # CLI stack
 brew "fzf"
