@@ -1426,10 +1426,18 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
     # filled chip with its name in that dark color. Lighten the fill toward
     # the text color until the dark name reads. ui.accent below keeps the
     # theme's own accent.
-    soft = bg
+    # Herdr always draws the sidebar's two rules (the edge and the line
+    # above "new / menu") in surface_dim. Ghostty's window is translucent
+    # and blurred, so its background is seen as the theme background with
+    # some wallpaper through it, while the rules are opaque: plain bg left
+    # them showing wherever the wallpaper is bright. Mixing in the
+    # wallpaper's average at the window's transparency matches what is seen.
+    opacity = GHOSTTY_OPACITY.get(colors.get("_theme_name", ""), 0.9)
+    wall = colors.get("_wallpaper_avg")
+    soft = mix_hex(bg, wall, 1.0 - opacity) if wall else bg
     tab_fill = accent
     for _ in range(12):
-        hi, lo = sorted((luminance(bg), luminance(tab_fill)), reverse=True)
+        hi, lo = sorted((luminance(soft), luminance(tab_fill)), reverse=True)
         if (hi + 0.05) / (lo + 0.05) >= 3.0:
             break
         tab_fill = mix_hex(tab_fill, fg, 0.15)
@@ -3082,6 +3090,12 @@ def apply(theme_dir: Path, wallpaper: Path | None = None, color_mode: str | None
     else:
         color_mode = load_color_mode(theme_dir)
     colors = restyle_theme(apply_color_mode(base, wallpaper, color_mode), theme_dir.name)
+    if "_wallpaper_avg" not in colors and wallpaper is not None and wallpaper.is_file():
+        # Herdr's sidebar rules are matched to the window as seen, which
+        # lets the wallpaper through (see render_herdr_theme).
+        avg = sample_wallpaper(wallpaper)[0]
+        if avg:
+            colors["_wallpaper_avg"] = avg
     write_sidecars(theme_dir, colors)
     if theme_dir.name in IME_BLUE_THEMES:
         colors["_apple_accent"] = "4"
