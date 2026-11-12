@@ -1425,9 +1425,10 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
     # read as a block taller than the line above it, so the fill is off
     # ("reset") and the name, like the rule, is one soft mid tone.
     # ui.accent below keeps the theme's own accent.
-    # Low enough that the rule all but disappears; the tab name repeats
-    # what the sidebar and status strip already say, so it can be quiet.
-    soft = mix_hex(bg, fg, 0.24)
+    # The rule is not wanted at all, so it takes the background color. The
+    # active tab's name goes with it; the sidebar and the status strip
+    # already say what the tab runs.
+    soft = bg
     # Blocked is the theme's red, unless the accent (working) is that red
     # already, as in No Bad Memories; then its yellow.
     blocked = ink[1] if color_distance(ink[1], accent) >= 40 else ink[3]
@@ -1488,9 +1489,11 @@ def render_herdr_theme(colors: dict[str, str]) -> str:
         'tab_bar_right_separator = " ╱ "\n'
         "sidebar_start_collapsed = true\n"
         'sidebar_collapsed_mode = "hidden"\n'
-        "sidebar_width = 18\n"
-        "sidebar_min_width = 14\n"
-        "sidebar_max_width = 24\n"
+        # Hidden until prefix+b, so it can afford room for task titles and
+        # branch names instead of cutting them off.
+        "sidebar_width = 28\n"
+        "sidebar_min_width = 22\n"
+        "sidebar_max_width = 36\n"
         "\n"
         # The sidebar as a live board: state in color, what each pane is
         # running ($cmd, reported by omacosy-studio), and for Claude the
