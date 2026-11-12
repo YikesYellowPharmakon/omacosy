@@ -1740,8 +1740,8 @@ def _replace_marked(text: str, marker: str, line: str) -> str:
 # colors. It is copied as is, without the theme tint.
 CURSOR_LAYER_SWAPS = {
     "no-bad-memories": {
-        "cursor_smear_gradient.glsl": ("cursor_smear_rainbow.glsl", "cursor-smear-rainbow.glsl"),
-        "sparks.glsl": ("sparks_rainbow.glsl", "cursor-sparks-rainbow.glsl"),
+        "cursor_smear_palette.glsl": ("cursor_smear_rainbow.glsl", "cursor-smear-rainbow.glsl"),
+        "sparks_palette.glsl": ("sparks_rainbow.glsl", "cursor-sparks-rainbow.glsl"),
     },
 }
 
@@ -1755,10 +1755,12 @@ CURSOR_EDGES = {
 
 
 def write_cursor_stack(theme_dir: Path, colors: dict[str, str]) -> list[Path]:
-    """Four playground shaders, each tinted with one color from this theme.
+    """Four playground shaders, tinted with this theme's colors.
 
-    Bottom to top: frozen, tapered blaze, smear gradient, sparks.
-    The colors are the theme's own function, string, keyword, and type.
+    Bottom to top: frozen, tapered blaze, smear, sparks.
+    Frozen and blaze each take one color, the theme's own function and
+    string. Smear and sparks flow through all four (keyword, string, type,
+    function) the way No Bad Memories' rainbow flows through every hue.
     A long cursor jump extends those trails to the screen edge.
     CURSOR_LAYER_SWAPS can replace a layer for one theme.
     """
@@ -1767,11 +1769,12 @@ def write_cursor_stack(theme_dir: Path, colors: dict[str, str]) -> list[Path]:
     paths: list[Path] = []
     swaps = CURSOR_LAYER_SWAPS.get(theme_dir.name, {})
     edges = CURSOR_EDGES.get(theme_dir.name, {})
+    palette = (roles["keyword"], roles["string"], roles["type"], roles["function"])
     layers = (
         ("cursor_frozen.glsl", "cursor-frozen.glsl", roles["function"]),
         ("cursor_blaze_tapered.glsl", "cursor-blaze-tapered.glsl", roles["string"]),
-        ("cursor_smear_gradient.glsl", "cursor-smear-gradient.glsl", roles["keyword"]),
-        ("sparks.glsl", "cursor-sparks.glsl", roles["type"]),
+        ("cursor_smear_palette.glsl", "cursor-smear-gradient.glsl", None),
+        ("sparks_palette.glsl", "cursor-sparks.glsl", None),
     )
     for source_name, dest_name, color in layers:
         if source_name in swaps:
@@ -1782,18 +1785,10 @@ def write_cursor_stack(theme_dir: Path, colors: dict[str, str]) -> list[Path]:
             paths.append(dest)
             continue
         text = (share / source_name).read_text(encoding="utf-8")
-        if source_name == "cursor_smear_gradient.glsl":
-            light = mix_hex(color, "#ffffff", 0.42)
-            dark = _scale_hex(color, 0.62)
-            text = _replace_marked(text, "omacosy-gradient-0", f"{_vec3(light)}, // omacosy-gradient-0")
-            text = _replace_marked(text, "omacosy-gradient-1", f"{_vec3(color)}, // omacosy-gradient-1")
-            text = _replace_marked(text, "omacosy-gradient-2", f"{_vec3(dark)} // omacosy-gradient-2")
-        elif source_name == "sparks.glsl":
-            text = _replace_marked(
-                text,
-                "omacosy-sparks",
-                f"vec3 base_color = {_vec3(color)}; // omacosy-sparks",
-            )
+        if color is None:
+            for n, swatch in enumerate(palette):
+                sep = "," if n < len(palette) - 1 else ""
+                text = _replace_marked(text, f"omacosy-palette-{n}", f"{_vec3(swatch)}{sep} // omacosy-palette-{n}")
         else:
             text = _replace_marked(text, "omacosy-body", f"const vec4 TRAIL_COLOR = {_vec4(color)}; // omacosy-body")
             text = _replace_marked(

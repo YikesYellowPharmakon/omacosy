@@ -2,7 +2,23 @@
 // For inquiries or modifications, please reach him
 // GitHub: https://github.com/PremModhaOfficial
 //
-// Cursor trail shader that creates a hexagonal trailing effect with gradient colors
+// Cursor trail shader that creates a hexagonal trailing effect. The colors
+// flow like the No Bad Memories rainbow, but through this theme's own four
+// colors; theme-pack.py fills them in.
+
+const vec3 PALETTE[4] = vec3[4](
+        vec3(0.7412, 0.2863, 0.1412), // omacosy-palette-0
+        vec3(0.8745, 0.4706, 0.1765), // omacosy-palette-1
+        vec3(0.9765, 0.8000, 0.4235), // omacosy-palette-2
+        vec3(0.9922, 0.4078, 0.5137) // omacosy-palette-3
+    );
+
+// A closed loop through the palette: h in [0, 1) goes 0 -> 1 -> 2 -> 3 -> 0.
+vec3 paletteAt(float h) {
+    float x = fract(h) * 4.0;
+    int i = int(x);
+    return mix(PALETTE[i], PALETTE[(i + 1) % 4], smoothstep(0.0, 1.0, fract(x)));
+}
 
 // Process each edge: compute distance and determine if point is inside
 void processEdge(vec2 p, vec2 a, vec2 b, inout float minDist, inout float inside) {
@@ -94,21 +110,6 @@ float easeClamped(float x) {
     return 1.0 - t * t * t;
 }
 
-// Generate gradient color based on position
-vec3 gradientColor(float factor) {
-    // ADD your custom colors here make sure to change the numColors variable
-    vec3 colors[3] = vec3[3](
-            vec3(0.8471, 0.5843, 0.4980), // omacosy-gradient-0
-            vec3(0.7412, 0.2863, 0.1412), // omacosy-gradient-1
-            vec3(0.4588, 0.1765, 0.0863) // omacosy-gradient-2
-        );
-    int numColors = 3;
-    float segment = 1.0 / float(numColors);
-    int index = int(mod(factor, 1.0) / segment);
-    float localFactor = fract(factor / segment);
-    return mix(colors[index % numColors], colors[(index + 1) % numColors], localFactor);
-}
-
 // Trail animation duration in seconds
 const float DURATION = 0.42;
 
@@ -194,23 +195,20 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 currentCenter = realCurrentPos + vec2(halfCurrentSize.x, -halfCurrentSize.y);
     float sdfCurrentCursor = sdRectangle(normCoord, currentCenter, halfCurrentSize);
 
-    // Generate gradient color
-    float gradientFactor = (normCoord.y + 1.0) * 0.5; // Gradient across vertical position
-    float timeComponent = sin(iTime); // Oscillates between -1 and 1
-    vec3 trailColorVec3 = gradientColor(gradientFactor * timeComponent);
-    vec4 trail = vec4(trailColorVec3, 0.8); // Set alpha for gradient trail
+    // Thin out toward the tail instead of darkening, so it reads on light
+    // and dark backgrounds alike.
+    vec2 tailCenter = previousPos + vec2(previousSize.x * 0.5, -previousSize.y * 0.5);
+    float lineLength = max(distance(currentCenter, tailCenter), 1e-4);
+    float along = clamp(distance(normCoord, currentCenter) / lineLength, 0.0, 1.0);
+    alpha *= 0.3 + 0.7 * (1.0 - smoothstep(0.0, 1.0, along));
 
-    // Enhance color saturation for more vibrant trail effect
-    float gray = dot(trail.rgb, vec3(0.299, 0.587, 0.114));
-    const float saturationBoost = 1.8;
-    vec4 enhancedColor = clamp(
-        mix(vec4(vec3(gray), trail.a), trail, saturationBoost),
-        0.0, 1.0
-    );
+    // The whole palette runs from cursor to tail, however short the move,
+    // and flows while the trail is up.
+    vec3 flow = paletteAt(along * 0.9 - iTime * 0.6);
 
     // Blend trail color with background
     vec4 originalColor = fragColor;
-    fragColor.rgb = mix(fragColor.rgb, enhancedColor.rgb, alpha);
+    fragColor.rgb = mix(fragColor.rgb, flow, alpha);
 
     // Remove trail where it overlaps with current cursor
     fragColor.rgb = mix(fragColor.rgb, originalColor.rgb, step(sdfCurrentCursor, 0.0));

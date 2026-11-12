@@ -1,7 +1,23 @@
 // Original shader by yakovgal on Shadertoy:
 // https://www.shadertoy.com/user/yakovgal
+// Palette variant: every spark carries one of this theme's four colors and
+// drifts through the others, like the No Bad Memories rainbow sparks.
+// theme-pack.py fills the colors in.
 
 const vec3 blue_shift = vec3(1.0, 1.0, 1.0);
+
+const vec3 PALETTE[4] = vec3[4](
+        vec3(0.6275, 0.4000, 0.4000), // omacosy-palette-0
+        vec3(0.8667, 0.6000, 0.6000), // omacosy-palette-1
+        vec3(0.7569, 0.7569, 0.7569), // omacosy-palette-2
+        vec3(0.3725, 0.5294, 0.5294) // omacosy-palette-3
+    );
+
+vec3 paletteAt(float h) {
+    float x = fract(h) * 4.0;
+    int i = int(x);
+    return mix(PALETTE[i], PALETTE[(i + 1) % 4], smoothstep(0.0, 1.0, fract(x)));
+}
 
 uint pcg(uint v)
 {
@@ -66,14 +82,12 @@ float getSdfRectangle(in vec2 p, in vec2 xy, in vec2 b)
 }
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
-    vec3 base_color = vec3(0.7569, 0.7569, 0.7569); // omacosy-sparks
-
     fragColor = texture(iChannel0, fragCoord.xy / iResolution.xy);
 
     float elapsed = iTime - iTimeCursorChange;
 
     float duration = 0.34;
-    float fadeInTime = 0.06;
+    float fadeInTime = 0.05;
     float fadeOutTime = 0.18;
     float fadeIn = smoothstep(0.0, fadeInTime, elapsed);
     float fadeOut = 1.0 - smoothstep(duration - fadeOutTime, duration, elapsed);
@@ -85,10 +99,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
     vec2 center = norm(iCurrentCursor.xy, 1.);
     vec2 vu = norm(fragCoord, 1.);
-    float c0 = 0., c1 = 0.;
+    float c0 = 0.;
+    vec3 tint = vec3(0.0);
 
     // === Configuration Constants ===
-    const float TOTAL_PARTICLES = 20.0; // default 50
+    const float TOTAL_PARTICLES = 28.0; // default 50
     const float PARTICLE_SEPARATION = 20.0; // default 20
     const float RANDOM_SEED_OFFSET = 50.0; // default 50
     const float TIME_MULTIPLIER = 5.0; // Default 5
@@ -107,14 +122,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         vec2 p = center + t * v - fragCoord;
         p.x = p.x + iCurrentCursor.x + iCurrentCursor.z * 0.5;
         p.y = p.y + iCurrentCursor.y - iCurrentCursor.w * 0.5;
-        c0 += COLOR_INTENSITY * (1. - t) / (1. + COLOR_FADE_FACTOR * dot(p, p));
-
-        p = p.yx;
-        v = v.yx;
-        p = vec2(
-                p.x / v.x,
-                p.y - p.x / v.x * v.y
-            );
+        float k = COLOR_INTENSITY * (1. - t) / (1. + COLOR_FADE_FACTOR * dot(p, p));
+        c0 += k;
+        float hue = fract(hash11(i + 97.0) + iTime * 0.4);
+        tint += k * paletteAt(hue);
     }
 
     vec2 offsetFactor = vec2(-.5, 0.5);
@@ -133,7 +144,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     // rgb *= fade;
     //
     // fragColor = mix(vec4(rgb, 1.), fragColor, 0.5);
-    vec3 rgb = c0 * base_color + c1 * base_color * blue_shift;
+    vec3 rgb = tint * blue_shift;
     rgb += hash33(vec3(fragCoord, iTime * 256.)) / 512.;
     //rgb = pow(rgb, vec3(0.4545));
 
