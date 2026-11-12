@@ -1706,11 +1706,6 @@ def write_yazi(theme_dir: Path, colors: dict[str, str]) -> None:
     )
 
 
-def _vec4(hex_color: str) -> str:
-    r, g, b = hex_to_rgb(hex_color)
-    return f"vec4({r / 255:.4f}, {g / 255:.4f}, {b / 255:.4f}, 1.0)"
-
-
 def _vec3(hex_color: str) -> str:
     r, g, b = hex_to_rgb(hex_color)
     return f"vec3({r / 255:.4f}, {g / 255:.4f}, {b / 255:.4f})"
@@ -1745,13 +1740,6 @@ CURSOR_LAYER_SWAPS = {
     },
 }
 
-# Per theme, a halo color per layer in place of the darker body color.
-CURSOR_EDGES = {
-    "no-bad-memories": {
-        "cursor_blaze_tapered.glsl": "#E5281A",
-    },
-}
-
 # The six colors a theme's trails flow through, in loop order. Each theme's
 # own colors, picked for the widest spread of hue and lightness it has, so
 # the flow reads like No Bad Memories' rainbow without leaving the theme.
@@ -1780,10 +1768,9 @@ def _cursor_palette(theme: str, roles: dict[str, str]) -> tuple[str, ...]:
 def write_cursor_stack(theme_dir: Path, colors: dict[str, str]) -> list[Path]:
     """Four playground shaders, tinted with this theme's colors.
 
-    Bottom to top: frozen, tapered blaze, smear, sparks.
-    Blaze takes one color, the theme's own string. Frozen, smear and sparks
-    flow through the six colors of _cursor_palette the way No Bad Memories'
-    rainbow flows through every hue.
+    Bottom to top: frozen, tapered blaze, smear, sparks. Each flows through
+    the six colors of _cursor_palette the way No Bad Memories' rainbow
+    flows through every hue; blaze runs half a loop apart from frozen.
     A long cursor jump extends those trails to the screen edge.
     CURSOR_LAYER_SWAPS can replace a layer for one theme.
     """
@@ -1791,15 +1778,14 @@ def write_cursor_stack(theme_dir: Path, colors: dict[str, str]) -> list[Path]:
     share = Path(__file__).resolve().parent.parent / "share" / "cursor"
     paths: list[Path] = []
     swaps = CURSOR_LAYER_SWAPS.get(theme_dir.name, {})
-    edges = CURSOR_EDGES.get(theme_dir.name, {})
     palette = _cursor_palette(theme_dir.name, roles)
     layers = (
-        ("cursor_frozen.glsl", "cursor-frozen.glsl", None),
-        ("cursor_blaze_tapered.glsl", "cursor-blaze-tapered.glsl", roles["string"]),
-        ("cursor_smear_palette.glsl", "cursor-smear-gradient.glsl", None),
-        ("sparks_palette.glsl", "cursor-sparks.glsl", None),
+        ("cursor_frozen.glsl", "cursor-frozen.glsl"),
+        ("cursor_blaze_tapered.glsl", "cursor-blaze-tapered.glsl"),
+        ("cursor_smear_palette.glsl", "cursor-smear-gradient.glsl"),
+        ("sparks_palette.glsl", "cursor-sparks.glsl"),
     )
-    for source_name, dest_name, color in layers:
+    for source_name, dest_name in layers:
         if source_name in swaps:
             swap_source, swap_dest = swaps[source_name]
             dest = theme_dir / swap_dest
@@ -1808,17 +1794,9 @@ def write_cursor_stack(theme_dir: Path, colors: dict[str, str]) -> list[Path]:
             paths.append(dest)
             continue
         text = (share / source_name).read_text(encoding="utf-8")
-        if color is None:
-            for n, swatch in enumerate(palette):
-                sep = "," if n < len(palette) - 1 else ""
-                text = _replace_marked(text, f"omacosy-palette-{n}", f"{_vec3(swatch)}{sep} // omacosy-palette-{n}")
-        else:
-            text = _replace_marked(text, "omacosy-body", f"const vec4 TRAIL_COLOR = {_vec4(color)}; // omacosy-body")
-            text = _replace_marked(
-                text,
-                "omacosy-edge",
-                f"const vec4 TRAIL_COLOR_ACCENT = {_vec4(edges.get(source_name) or _scale_hex(color, 0.55))}; // omacosy-edge",
-            )
+        for n, swatch in enumerate(palette):
+            sep = "," if n < len(palette) - 1 else ""
+            text = _replace_marked(text, f"omacosy-palette-{n}", f"{_vec3(swatch)}{sep} // omacosy-palette-{n}")
         dest = theme_dir / dest_name
         dest.write_text(text, encoding="utf-8")
         paths.append(dest)
