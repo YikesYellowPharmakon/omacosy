@@ -20,10 +20,53 @@ if [[ ! -x "$HERDR" ]]; then
   exec "${SHELL:-/bin/zsh}" -l
 fi
 
+# `session delete` refuses a session that is still running. Closing the
+# window detaches the client, and the server takes a few tenths of a
+# second to shut down after that, so an immediate delete failed and left
+# the session behind. Wait for it to stop (up to 3 s), then delete.
 stop_session() {
   trap - EXIT HUP TERM INT
   "$HERDR" session stop "$SESSION" >/dev/null 2>&1 || true
+  local i
+  for i in {1..30}; do
+    session_running "$SESSION" || break
+    sleep 0.1
+  done
   "$HERDR" session delete "$SESSION" >/dev/null 2>&1 || true
+}
+
+session_running() {
+  "$HERDR" session list --json 2>/dev/null |
+    /usr/bin/python3 -c 'import json, sys
+name = sys.argv[1]
+s = [x for x in json.load(sys.stdin).get("sessions", []) if x.get("name") == name]
+sys.exit(0 if s and s[0].get("running") else 1)' "$1"
+}
+
+# Windows that closed without cleaning up (a killed Ghostty, or the
+# race above in an earlier version) leave stopped ghostty-<pid> sessions.
+# Deleted only when stopped AND the window script that owned it (the pid
+# in the name) is gone: a window opening right now has a session that is
+# not running yet, and its script is still alive.
+sweep_stopped_sessions() {
+  local name
+  "$HERDR" session list --json 2>/dev/null |
+    /usr/bin/python3 -c 'import json, os, sys
+for s in json.load(sys.stdin).get("sessions", []):
+    name = s.get("name", "")
+    pid = name[len("ghostty-"):]
+    if not name.startswith("ghostty-") or s.get("running") or not pid.isdigit():
+        continue
+    try:
+        os.kill(int(pid), 0)
+        continue  # its window is still there
+    except ProcessLookupError:
+        print(name)
+    except PermissionError:
+        continue' |
+    while IFS= read -r name; do
+      "$HERDR" session delete "$name" >/dev/null 2>&1 || true
+    done
 }
 
 label_panes() {
@@ -128,6 +171,7 @@ PY
 
 cd "$HOME" || exit 1
 setopt NO_HUP
+sweep_stopped_sessions &!
 # Start the watcher before the exit trap. A background job copies a
 # trap that is already installed, and that trap would stop this
 # window's session as soon as the watcher returned.
